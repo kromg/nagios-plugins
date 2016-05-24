@@ -1,1 +1,0 @@
-/home/giacomo/Scripts/perl/nagios/plugins/check_end2end.pl
