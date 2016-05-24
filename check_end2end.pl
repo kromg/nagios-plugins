@@ -20,11 +20,15 @@
 #       2016-05-19T08:46:55+0200
 #           First release.
 #
+#       2016-05-24T11:13:44+0200 v1.0.1
+#           - Removed "Export" as parent to Monitoring::Plugin::End2end;
+#           - Added TODO to make steps optional
+#
 
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(1.0.0);
+use version; our $VERSION = qv(1.0.1);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
@@ -196,6 +200,9 @@ if ($opts->timeout()) {
     alarm $opts->timeout();
 }
 
+# TODO: make steps optional by specifying some configuration variable like
+# "on_failure = WARNING"
+
 my $totDuration = 0;
 for my $step_name ( @step_names ) {
 
@@ -304,14 +311,6 @@ use warnings;
 use Monitoring::Plugin;
 use parent qw(
     Monitoring::Plugin
-    Exporter
-);
-
-our @EXPORT = qw(
-    OK
-    WARNING
-    CRITICAL
-    UNKNOWN
 );
 
 sub new {
@@ -520,7 +519,7 @@ check_end2end.pl - Simple configurable end-to-end probe plugin for Nagios
 
 =head1 VERSION
 
-This is the documentation for check_end2end.pl v1.0.0
+This is the documentation for check_end2end.pl v1.0.1
 
 
 =head1 SYNOPSYS
