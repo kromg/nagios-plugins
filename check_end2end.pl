@@ -24,11 +24,14 @@
 #           - Removed "Export" as parent to Monitoring::Plugin::End2end;
 #           - Added TODO to make steps optional
 #
+#       2016-05-25T09:06:44+0200 v1.0.2
+#           - Filled in contact/bug/copyright details in perl POD documentation
+#
 
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(1.0.1);
+use version; our $VERSION = qv(1.0.2);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
@@ -519,7 +522,7 @@ check_end2end.pl - Simple configurable end-to-end probe plugin for Nagios
 
 =head1 VERSION
 
-This is the documentation for check_end2end.pl v1.0.1
+This is the documentation for check_end2end.pl v1.0.2
 
 
 =head1 SYNOPSYS
@@ -652,5 +655,60 @@ Here's a sample configuration file for this plugin
         url = "$BASE_URL/pri/home.html"
         method = GET
     </Step>
+
+=head1 TODO
+
+Some ideas:
+
+=over 4
+
+=item B<*> Enable environment variables
+
+Allow usage of Nagios enviroment variables in configuration file.
+
+
+=item B<*> Enable macros
+
+Add a command line switch so that Nagios macros can be used in command line and
+be expanded in configuration file.
+
+
+=back
+
+
+
+=head1 AUTHOR
+
+Giacomo Montagner, <kromg at entirelyunlike.net>,
+<kromg.kromg at gmail.com> >
+
+=head1 BUGS AND CONTRIBUTIONS
+
+Please report any bug at L<https://github.com/kromg/nagios-plugins/issues>. If
+you have any patch/contribution, feel free to fork git repository and submit a
+pull request with your modifications.
+
+
+
+
+
+=head1 LICENSE AND COPYRIGHT
+
+Copyright (C) 2016 Giacomo Montagner <giacomo@entirelyunlike.net>
+
+This program is free software: you can redistribute it and/or modify
+it under the same terms as Perl itself, either Perl version 5.8.4 or,
+at your option, any later version of Perl 5 you may have available.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+See http://dev.perl.org/licenses/ for more information.
+
+
+=head1 AVAILABILITY
+
+Latest sources are available from L<https://github.com/kromg/nagios-plugins>
 
 =cut
