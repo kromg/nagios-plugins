@@ -31,6 +31,8 @@
 #           - Added support for "on_failure" configuration directive
 #           - Added more documentation about configuration file format
 #
+#
+#
 
 
 use strict;
@@ -128,6 +130,29 @@ $np->add_arg(
 );
 
 $np->add_arg(
+    spec => 'useEnvVars|e',
+    help => qq{-e, --useEnvVars\n}
+          . qq{   Interpolate variables in configuration file using enviroment variables }
+          . qq{also. Default: NO. },
+);
+
+$np->add_arg(
+    spec => 'allowEmptyVars|E',
+    help => qq{-E, --allowEmptyVars\n}
+          . qq{   By default, Config::General will croak if it tries to interpolate an }
+          . qq{undefined variable. Use this option to turn off this behaviour.},
+);
+
+$np->add_arg(
+    spec => 'var=s@',
+    help => qq{--var <VAR=VALUE>\n}
+          . qq{   Specify this option (even multiple times) to pass variables to this }
+          . qq{plugin on the command line. These variables will be interpolated in the }
+          . qq{configuration file, as if they were found inside environment. This automatically }
+          . qq{turns on --useEnvVars flag.},
+);
+
+$np->add_arg(
     spec => 'manual|M',
     help => qq{-M, --manual\n   Show plugin manual (requires perldoc executable).},
 );
@@ -153,6 +178,21 @@ unless ($opts->configFile()) {
     $np->plugin_die("Missing mandatory option: --configFile|-f");
 }
 
+my $useEnv = $opts->useEnvVars();
+if (defined( my $vars = $opts->var() )) {
+    $useEnv = 1;
+    $np->plugin_die("Cannot parse variables passed via --var flag")
+        unless ref( $vars ) && ref( $vars ) eq 'ARRAY';
+
+    for my $vardef (@$vars) {
+        my ($name, $val) = split('=', $vardef, 2);
+        $np->plugin_die("Cannot parse variable definition: $vardef")
+            unless defined($name) && defined($val);
+
+        $ENV{$name} = $value;
+    }
+}
+
 
 # ------------------------------------------------------------------------------
 #  External configuration loading
@@ -160,11 +200,11 @@ unless ($opts->configFile()) {
 
 # Read configuration file
 my $conf = Config::General->new(
-    -ConfigFile => $opts->configFile(),
+    -ConfigFile      => $opts->configFile(),
     -InterPolateVars => 1,
-    -InterPolateEnv => 0,                   # TODO: be configurable
-    -StrictVars => 1,                       # TODO: be configurable
-    -ExtendedAccess => 1,
+    -InterPolateEnv  => $useEnv,
+    -StrictVars      => ! $opts->allowEmptyVars(),
+    -ExtendedAccess  => 1,
 );
 
 if ($conf->exists("Monitoring::Plugin::shortname")) {
