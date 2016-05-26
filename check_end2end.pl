@@ -27,11 +27,15 @@
 #       2016-05-25T09:06:44+0200 v1.0.2
 #           - Filled in contact/bug/copyright details in perl POD documentation
 #
+#       2016-05-26T14:19:26+0200 v1.1.0
+#           - Added support for "on_failure" configuration directive
+#           - Added more documentation about configuration file format
+#
 
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(1.0.2);
+use version; our $VERSION = qv(1.1.0);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
@@ -212,7 +216,7 @@ for my $step_name ( @step_names ) {
     debug "Performing step: ", $step_name;
 
     my $step = $steps->step( $step_name )
-        or $np->plugin_die("Malformed configuration file -- cannot proceed on step $step_name");
+        or $np->plugin_die("Malformed configuration file -- cannot proceed on step $step_name; error token was: ". $Step::reason);
 
     debug "URL: ", $step->url();
     debug "Data: ", ddump([ $step->data() ])
@@ -251,7 +255,17 @@ for my $step_name ( @step_names ) {
         }
     }
     else {
-        $np->plugin_exit(CRITICAL, plugin_message( "Step $step_name failed (". $response->status_line(). ")" ));
+
+        my $level = $step->on_failure();
+
+        if ($level == OK) {
+            $np->add_ok( "Step $step_name failed (". $response->status_line(). ") but was ignored as configured" );
+        } elsif ($level == WARNING) {
+            $np->raise_status( WARNING );
+            $np->add_warning( "Step $step_name failed (". $response->status_line(). ")" );
+        } else {
+            $np->plugin_exit($level, "Step $step_name failed (". $response->status_line(). ")" );
+        }
     }
 
 }
@@ -411,6 +425,7 @@ package Step;
 
 use strict;
 use warnings;
+use Monitoring::Plugin;
 
 sub new {
     my $class = shift;
@@ -418,12 +433,39 @@ sub new {
 
     my $step = {};
 
-    return unless $step->{url} = delete $_[0]->{url};
-
-    if (defined( my $data = delete $_[0]->{binary_data})) {
-        return unless $step->{data} = Data->new( $data );
+    # In case of errors, do not initialize this object
+    # (will cause the plugin to die with an error)
+    unless ( $step->{url} = delete $_[0]->{url} ) {
+        our $reason = "missing 'url' directive";
+        return;
     }
 
+    # Parse binary data if present
+    if (defined( my $data = delete $_[0]->{binary_data})) {
+        unless ( $step->{data} = Data->new( $data ) ) {
+            our $reason = "parsing 'binary_data' failed";
+            return;
+        }
+    }
+
+    # Parse on_failure directive if present, otherwise force it
+    # to CRITICAL
+    if (exists( $_[0]->{on_failure} )) {
+        eval {
+            # Call OK(), WARNING(), CRITICAL() or UNKNOWN()
+            no strict "refs";
+            my $m = uc( $_[0]->{on_failure} );
+            $step->{on_failure} = $m->();
+        };
+        if ($@) {
+            our $reason = "parsing 'on_failure' failed (Caused by: $@)";
+            return;
+        }
+    } else {
+        $step->{on_failure} = CRITICAL;
+    }
+
+    # Parse method if present, otherwise force it to "get"
     $step->{method} = $_[0]->{method} ? lc( $_[0]->{method} ) : 'get';
 
     return bless( $step, $class );
@@ -442,6 +484,10 @@ sub data {
 
 sub method {
     return $_[0]->{method};
+}
+
+sub on_failure {
+    return $_[0]->{on_failure};
 }
 
 
@@ -522,7 +568,7 @@ check_end2end.pl - Simple configurable end-to-end probe plugin for Nagios
 
 =head1 VERSION
 
-This is the documentation for check_end2end.pl v1.0.2
+This is the documentation for check_end2end.pl v1.1.0
 
 
 =head1 SYNOPSYS
@@ -530,21 +576,26 @@ This is the documentation for check_end2end.pl v1.0.2
 See check_end2end.pl -h
 
 
-=head1 THRESHOLD FORMATS
-
-=head2 FOREWORD
+=head1 THE CHECK
 
 Every step configured in the configuration file (see L<CONFIGURATION FILE
 FORMAT>) is performed regardless of the fact that you specify a threshold for
 that step, a global threshold, or a single thresold that will be applied to
 every step, because B<every step is checked for success or failure>.
+A step check is considered successful if LWP::USerAgent's C<is_success()> method
+returns true; otherwise, the check is considered as failed.
 
-A failure in one of the steps will cause the immediate exit of the check, with
-a critical status, while if one or more steps are above their time thresholds
+A failure in one of the steps will cause the immediate exit of the plugin, with
+a critical status, unless configured otherwise (again, see L<CONFIGURATION FILE
+FORMAT>), while, if one or more steps are above their time thresholds,
 the check will continue and perform the remaining steps (unless the global
-timeout is reached).
+timeout is reached). See L<THRESHOLD FORMATS> for details about timing
+thresholds.
 
 Overall status of the check will be reported at the end.
+
+
+=head1 THRESHOLD FORMATS
 
 =head2 -C <CRIT>, -W <WARN>
 
@@ -641,6 +692,7 @@ Here's a sample configuration file for this plugin
     <Step "00 - Public login page">
         url = "$BASE_URL/login.html"
         method = GET
+        on_failure = WARNING
     </Step>
 
     # Lines can be split as in shell scripts, escaping the final newline with a \
@@ -655,6 +707,54 @@ Here's a sample configuration file for this plugin
         url = "$BASE_URL/pri/home.html"
         method = GET
     </Step>
+
+
+The configuration file is made up of one or many named <Step> blocks, each step
+is performed and checked for success. Steps are B<ordered alphabetically>, so
+make sure to give them names that reflect the real order to be respected.
+
+
+=head2 B<Required Step parameters>
+
+=over 4
+
+=item * B<url>
+
+C<url> is the only required parameter for a Step. The url you want to test.
+
+=back
+
+
+=head2 B<Optional Step parameters>
+
+=over 4
+
+=item * B<method>
+
+C<method> specifies which http method to use to perform the step. B<GET> is the
+default. This is passed to LWP::UserAgent after lowercasing it.
+
+
+=item * B<binary_data>
+
+C<binary_data> is the B<url-encoded> data to be passed to LWP::UserAgent. Prior
+to be passed to LWP::UserAgent, binary_data is parsed by the URI::URL module.
+
+
+=item * B<on_failure>
+
+C<on_failure> specifies if a failure of the Step must be treated as an OK
+status, a WARNING, a CRITICAL or ar UNKNOWN.
+The default is to treat a failure as a CIRITCAL event and to return an error
+immediately.
+Specify OK if you just want to time some steps but don't want failures to
+be considered as errors; a level of WARNING will raise the level of the check
+to WARNING (at least, unless some more serious error happens afterwards); a
+level of CRITICAL (default) or UNKNOWN will cause the check to stop as soon
+as the error happens and to exit reporting that severity level.
+
+=back
+
 
 =head1 TODO
 
@@ -674,6 +774,27 @@ be expanded in configuration file.
 
 
 =back
+
+
+
+
+
+=head1 PREREQUISITES
+
+Reuired modules:
+
+=over 4
+
+=item * Config::General
+
+=item * LWP::UserAgent
+
+=item * Monitoring::Plugin
+
+=item * URI::URL
+
+=back
+
 
 
 
