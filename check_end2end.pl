@@ -31,13 +31,18 @@
 #           - Added support for "on_failure" configuration directive
 #           - Added more documentation about configuration file format
 #
+#       2016-05-29T03:05:41+0200 v1.2.0
+#           - Added -e flag to interpolate environment variables
+#           - Added -E flag to allow empty vars
+#           - Added --var flag to pass variables on command line
+#
 #
 #
 
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(1.1.0);
+use version; our $VERSION = qv(1.2.0);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
@@ -178,7 +183,7 @@ unless ($opts->configFile()) {
     $np->plugin_die("Missing mandatory option: --configFile|-f");
 }
 
-my $useEnv = $opts->useEnvVars();
+my $useEnv = $opts->useEnvVars() || 0;
 if (defined( my $vars = $opts->var() )) {
     $useEnv = 1;
     $np->plugin_die("Cannot parse variables passed via --var flag")
@@ -189,7 +194,7 @@ if (defined( my $vars = $opts->var() )) {
         $np->plugin_die("Cannot parse variable definition: $vardef")
             unless defined($name) && defined($val);
 
-        $ENV{$name} = $value;
+        $ENV{$name} = $val;
     }
 }
 
@@ -246,9 +251,6 @@ if ($opts->timeout()) {
 
     alarm $opts->timeout();
 }
-
-# TODO: make steps optional by specifying some configuration variable like
-# "on_failure = WARNING"
 
 my $totDuration = 0;
 for my $step_name ( @step_names ) {
@@ -608,7 +610,7 @@ check_end2end.pl - Simple configurable end-to-end probe plugin for Nagios
 
 =head1 VERSION
 
-This is the documentation for check_end2end.pl v1.1.0
+This is the documentation for check_end2end.pl v1.2.0
 
 
 =head1 SYNOPSYS
@@ -718,7 +720,7 @@ Here's a sample configuration file for this plugin
     ########## Custom configuration directives
     #
     # Optional - You can specify variables to be interpolated in the
-    # following configuration
+    # following configuration - see "VARIABLES INTERPOLATION" in manual
     BASE_URL = "https://www.example.com"
 
 
@@ -796,25 +798,55 @@ as the error happens and to exit reporting that severity level.
 =back
 
 
-=head1 TODO
+=head1 VARIABLES INTERPOLATION
 
-Some ideas:
+By default, any variable can be used inside the configuration file, after being
+initialized. The variable's value will be interpolated in the fields following
+variable initialization. Variables can be delimited using shell's notation:
 
-=over 4
+    ${VARIABLE}
 
-=item B<*> Enable environment variables
+or just
 
-Allow usage of Nagios enviroment variables in configuration file.
+    $VARIABLE
 
-
-=item B<*> Enable macros
-
-Add a command line switch so that Nagios macros can be used in command line and
-be expanded in configuration file.
+if there are no ambiguities.
+See the manual of Config::General::Interpolated for full details.
 
 
-=back
+=head2 Environment variables
 
+Environment variables can be used for interpolation if -e|--useEnvVars flag is
+specified on the command line. B<Be careful!> - usage of environment variables
+can expose your check to environment variables forgery and so must be regarded
+as a possible security risk.
+
+=head2 Variables passed by the command line
+
+You can use the flag --var multiple times to specify variables on the command
+line. This is useful for Nagios macross expansion, for example:
+
+    check_end2end.pl -f config.cfg --var PROTO=https --var HOST=$HOSTADDRESS$ \
+        --var CHECK="$SERVICENAME$"
+
+and, in the configuration file:
+
+    Monitoring::Plugin::shortname = $CHECK
+
+    <Step "some step">
+        url = ${PROTO}://$HOST/some/url.html
+        ...
+    </Step>
+
+B<Be careful!> - --var enables environment variables interpolation
+automatically. Any previously defined environment variable will be overridden,
+though, if a variable with the same name is specified on the command line.
+
+
+=head2 Empty variables
+
+By default, Config::General will croak() if undefined variables are used inside
+the configuration file. Use -E|--allowEmptyVars to override this behaviour.
 
 
 
