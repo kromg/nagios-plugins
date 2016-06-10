@@ -36,13 +36,17 @@
 #           - Added -E flag to allow empty vars
 #           - Added --var flag to pass variables on command line
 #
+#       2016-06-10T23:06:39+0200 v1.3.0
+#           - Added -D flag to dump the downloaded pages to a directory
+#             (with debugging purposes)
+#
 #
 #
 
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(1.2.0);
+use version; our $VERSION = qv(1.3.0);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
@@ -92,6 +96,14 @@ $np->add_arg(
     spec => 'debug|d',
     help => qq{-d, --debug\n   Print debugging messages to STDERR. }
           . qq{Package Data::Dumper is required for debug.},
+);
+
+$np->add_arg(
+    spec => 'dumpPages|D=s',
+    help => qq{-D, --dumpPages=/dump/directory\n   Writes the output of each step }
+          . qq{into a file under the named destination directory. The name of the file }
+          . qq{will be the same as the name of the corresponding step. Path::Tiny is }
+          . qq{required to dump page content.},
 );
 
 $np->add_arg(
@@ -177,6 +189,21 @@ if ($opts->debug) {
 } else {
     *debug = sub { return; };
     *ddump = *debug;
+}
+
+if ($opts->dumpPages) {
+    require Path::Tiny;
+    require File::Spec;
+    *writepage = sub {
+        debug qq{Dumping step "$_[0]" to }. $opts->dumpPages();
+        Path::Tiny::path(
+            File::Spec->catfile(
+                $opts->dumpPages(), $_[0]
+            )
+        )->spew( $_[1] );
+    };
+} else {
+    *writepage = sub { return; };
 }
 
 unless ($opts->configFile()) {
@@ -279,12 +306,17 @@ for my $step_name ( @step_names ) {
     }
     my $after = time();
 
+    debug "Cookies: ", $ua->cookie_jar->as_string();
+
     my $duration = sprintf("%.3f", $after - $before);
     $totDuration += $duration;
     my $warn = $warns->get( $step_name );
     my $crit = $crits->get( $step_name );
 
     if ($response->is_success) {
+
+        writepage($step_name, $response->decoded_content() );
+
         $np->add_perfdata( label => "Step_${step_name}_duration", value => $duration, uom => "s", warning => $warn, critical => $crit );
         my $status = $np->check_threshold( check => $duration, warning => $warn, critical => $crit );
 
@@ -610,7 +642,7 @@ check_end2end.pl - Simple configurable end-to-end probe plugin for Nagios
 
 =head1 VERSION
 
-This is the documentation for check_end2end.pl v1.2.0
+This is the documentation for check_end2end.pl v1.3.0
 
 
 =head1 SYNOPSYS
@@ -864,6 +896,18 @@ Reuired modules:
 =item * Monitoring::Plugin
 
 =item * URI::URL
+
+=back
+
+for debugging:
+
+=over 4
+
+=item * Data::Dumper
+
+=item * File::Spec
+
+=item * Path::Tiny
 
 =back
 
