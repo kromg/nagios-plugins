@@ -327,6 +327,16 @@ for my $step_name ( @step_names ) {
         } elsif ($status == CRITICAL) {
             $np->add_critical( "Step $step_name took ${duration}s > ${crit}s" );
         }
+
+        if ($step->has_pattern()) {
+            $status = ($response->decoded_content() =~ $step->pattern)
+                      ?   OK
+                      :   $step->on_grep_failure();
+            debug "Grep ", $step->pattern(), ": ", $status;
+            if ($status != OK) {
+                $np->add_status($status, qq{Configured pattern not found at step "$step_name"});
+            }
+        }
     }
     else {
 
@@ -440,6 +450,18 @@ sub add_ok {
     push @{ $self->{_end2end_oks} }, @_;
 }
 
+sub add_status {
+    my ($self, $status, $reason) = @_;
+
+    if ($status == OK) {
+        $self->add_ok( $reason );
+    } elsif ($status == WARNING) {
+        $self->add_warning( $reason );
+    } elsif ($status == CRITICAL) {
+        $self->add_critical( $reason );
+    }
+}
+
 sub status {
     return $_[0]->{_end2end_status};
 }
@@ -525,18 +547,27 @@ sub new {
     # Parse on_failure directive if present, otherwise force it
     # to CRITICAL
     if (exists( $_[0]->{on_failure} )) {
-        eval {
-            # Call OK(), WARNING(), CRITICAL() or UNKNOWN()
-            no strict "refs";
-            my $m = uc( $_[0]->{on_failure} );
-            $step->{on_failure} = $m->();
-        };
-        if ($@) {
-            our $reason = "parsing 'on_failure' failed (Caused by: $@)";
-            return;
-        }
+        $step->{on_failure} = _parse( 'on_failure', delete $_[0]->{on_failure} );
+        defined $step->{on_failure} or return;
     } else {
         $step->{on_failure} = CRITICAL;
+    }
+
+    # Parse grep_str/grep_re patterns if present
+    if (my $grep_re = delete $_[0]->{grep_re}) {
+        $step->{pattern} = qr/$grep_re/;
+        $step->{on_grep_failure} = CRITICAL;
+        $step->{has_pattern} = 1;
+    } elsif (my $grep_str = delete $_[0]->{grep_str}) {
+        $step->{pattern} = quotemeta($grep_str);
+        $step->{on_grep_failure} = CRITICAL;
+        $step->{has_pattern} = 1;
+    }
+
+    # Parse on_grep_failure if present
+    if (exists( $_[0]->{on_grep_failure} )) {
+        $step->{on_grep_failure} = _parse( 'on_grep_failure', delete $_[0]->{on_grep_failure} );
+        exists $step->{on_grep_failure} or return;
     }
 
     # Parse method if present, otherwise force it to "get"
@@ -545,6 +576,18 @@ sub new {
     return bless( $step, $class );
 }
 
+sub _parse {
+    eval {
+        # Call OK(), WARNING(), CRITICAL() or UNKNOWN()
+        no strict "refs";
+        my $m = uc( $_[1] );
+        return $m->();
+    };
+    if ($@) {
+        $Step::reason = "parsing '". $_[0]. "' failed (Caused by: $@)";
+        return;
+    }
+}
 
 sub url {
     return $_[0]->{url};
@@ -556,12 +599,24 @@ sub data {
     return \%data;
 }
 
+sub pattern {
+    return $_[0]->{pattern};
+}
+
+sub has_pattern {
+    return $_[0]->{has_pattern};
+}
+
 sub method {
     return $_[0]->{method};
 }
 
 sub on_failure {
     return $_[0]->{on_failure};
+}
+
+sub on_grep_failure {
+    return $_[0]->{on_grep_failure};
 }
 
 
