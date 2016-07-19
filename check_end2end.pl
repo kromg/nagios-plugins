@@ -83,8 +83,10 @@ my $plugin_name = basename( $0 );
 #   --verbose, --help, --usage, --timeout and --host are defined automatically.
 my $np = Monitoring::Plugin::End2end->new(
     usage => "Usage: %s [-v|--verbose] [-t <timeout>] [-d|--debug] [-M|--manual] "
+          . "[-D|--dumpPages=/dump/directory] [-e|--useEnvVars] [-E|--allowEmptyVars] "
           . "[-c|--critical=<threshold>] [-w|--warning=<threshold>] "
           . "[-C|--totcritical=<threshold>] [-W|--totwarning=<threshold>] "
+          . "[--var VAR=VALUE [--var VAR2=VALUE2 [ ... ] ] ] "
           . "-f|--configFile=<cfgfile>",
     version => $VERSION,
     blurb   => "This plugin uses LWP::UserAgent to fake a website navigation"
