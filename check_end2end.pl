@@ -46,7 +46,7 @@
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(1.3.0);
+use version; our $VERSION = qv(1.4.0);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
@@ -568,7 +568,9 @@ sub new {
 
     # Parse on_grep_failure if present
     if (exists( $_[0]->{on_grep_failure} )) {
+        main::debug "Parsing: ", $_[0]->{on_grep_failure};
         $step->{on_grep_failure} = _parse( 'on_grep_failure', delete $_[0]->{on_grep_failure} );
+        main::debug "Parsed as: ", $step->{on_grep_failure};
         exists $step->{on_grep_failure} or return;
     }
 
@@ -579,16 +581,24 @@ sub new {
 }
 
 sub _parse {
+    # main::debug "_parse ", $_[0], " / ", $_[1];
+    my $parsed;
     eval {
         # Call OK(), WARNING(), CRITICAL() or UNKNOWN()
-        no strict "refs";
         my $m = uc( $_[1] );
-        return $m->();
+        {
+            no strict "refs";
+            $parsed = $m->();
+        }
+        # main::debug "Value: $parsed";
     };
+
     if ($@) {
         $Step::reason = "parsing '". $_[0]. "' failed (Caused by: $@)";
         return;
     }
+
+    return $parsed;
 }
 
 sub url {
