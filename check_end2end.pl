@@ -40,6 +40,10 @@
 #           - Added -D flag to dump the downloaded pages to a directory
 #             (with debugging purposes)
 #
+#       2016-07-20T11:07:13+0200 v1.4.0
+#           - Added grep_re|grep_str options to configuration file, along with
+#             on_grep_failure.
+#
 #
 #
 
@@ -709,7 +713,7 @@ check_end2end.pl - Simple configurable end-to-end probe plugin for Nagios
 
 =head1 VERSION
 
-This is the documentation for check_end2end.pl v1.3.0
+This is the documentation for check_end2end.pl v1.4.0
 
 
 =head1 SYNOPSYS
@@ -834,6 +838,7 @@ Here's a sample configuration file for this plugin
         url = "$BASE_URL/login.html"
         method = GET
         on_failure = WARNING
+        grep_str        = $BASE_URL/login.html
     </Step>
 
     # Lines can be split as in shell scripts, escaping the final newline with a \
@@ -842,6 +847,8 @@ Here's a sample configuration file for this plugin
         binary_data = username=exampleuser&\
             password=examplepassword
         method = POST
+        grep_re         = Secret\s+token\d+
+        on_grep_failure = WARNING
     </Step>
 
     <Step "03 - Private login page">
@@ -893,6 +900,28 @@ be considered as errors; a level of WARNING will raise the level of the check
 to WARNING (at least, unless some more serious error happens afterwards); a
 level of CRITICAL (default) or UNKNOWN will cause the check to stop as soon
 as the error happens and to exit reporting that severity level.
+
+
+=item * B<grep_str|grep_re>
+
+C<grep_str> specifies a string to be searched inside the response body. The
+default status in case the string is not found is CRITICAL. This can be changed
+by specifying C<on_grep_failure> parameter. With C<grep_str> the string is
+enclosed between escaping regexp sequence: \Q...\E so it's treated as a literal
+string.
+
+C<grep_re> is the same as C<grep_str>, but the given pattern is assumed to be
+a regexp, and is quoted using the regexp quoting operator C<qr{}>.
+
+If a string was not found in a step, the following steps will still be performed.
+
+
+=item * B<on_grep_failure>
+
+C<on_grep_failure> specifies the status level in case the C<grep_str|grep_re>
+was not found inside response (decoded) body. It's only meaningful if
+either C<grep_str> or C<grep_re> was specified. The default is to treat the
+event as a CRITICAL.
 
 =back
 
