@@ -180,6 +180,14 @@ $np->add_arg(
 );
 
 $np->add_arg(
+    spec => 'useEnvProxy|P',
+    help => qq{-P, --useEnvProxy\n}
+          . qq{   Get proxy configuration from environment variables (you can use --var to pass }
+          . qq{environment variables like http_proxy/https_proxy, and so on, if they're not in your }
+          . qq{environment already)},
+);
+
+$np->add_arg(
     spec => 'manual|M',
     help => qq{-M, --manual\n   Show plugin manual (requires perldoc executable).},
 );
@@ -267,6 +275,11 @@ my $ua = LWP::UserAgent->new(
     cookie_jar => { },
     # TODO: be more configurable
 );
+
+# Get proxy settings form environment variables if requested
+if ($opts->useEnvProxy()) {
+    $ua->env_proxy();
+}
 
 my $steps = Steps->new( $conf->hash("Step") );
 
@@ -859,6 +872,13 @@ Here's a sample configuration file for this plugin
     #
     # Optional - Override useragent string - defaults to check_end2end
     LWP::UserAgent::agent = "Nagios login check via check_end2end"
+
+    # Optional - Specify proxy settings in the configuration file
+    LWP::UserAgent::proxy           = http://proxy.example.com:3128/
+    LWP::UserAgent::proxy::schemes  = http, https
+    LWP::UserAgent::proxy::user     = proxyuser         # If required
+    LWP::UserAgent::proxy::password = proxypassword     # If required
+
 
 
     ########## Custom configuration directives
