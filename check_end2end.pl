@@ -50,7 +50,7 @@
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(1.4.0);
+use version; our $VERSION = qv(1.4.1);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
@@ -286,6 +286,7 @@ if ($opts->timeout()) {
 }
 
 my $totDuration = 0;
+STEP:
 for my $step_name ( @step_names ) {
 
     debug "Performing step: ", $step_name;
@@ -319,43 +320,79 @@ for my $step_name ( @step_names ) {
     my $warn = $warns->get( $step_name );
     my $crit = $crits->get( $step_name );
 
-    if ($response->is_success) {
 
-        writepage($step_name, $response->decoded_content() );
+    # -----------------------------------------
+    # Process result in case of failure of step
+    # -----------------------------------------
 
-        $np->add_perfdata( label => "Step_${step_name}_duration", value => $duration, uom => "s", warning => $warn, critical => $crit );
-        my $status = $np->check_threshold( check => $duration, warning => $warn, critical => $crit );
-
-        if ($status == OK) {
-            $np->add_ok( "Step $step_name took ${duration}s" );
-        } elsif ($status == WARNING) {
-            $np->add_warning( "Step $step_name took ${duration}s > ${warn}s" );
-        } elsif ($status == CRITICAL) {
-            $np->add_critical( "Step $step_name took ${duration}s > ${crit}s" );
-        }
-
-        if ($step->has_pattern()) {
-            $status = ($response->decoded_content() =~ $step->pattern)
-                      ?   OK
-                      :   $step->on_grep_failure();
-            debug "Grep ", $step->pattern(), ": ", $status;
-            if ($status != OK) {
-                $np->add_status($status, qq{Configured pattern not found at step "$step_name"});
-            }
-        }
-    }
-    else {
+    if (! $response->is_success) {
 
         my $level = $step->on_failure();
 
         if ($level == OK) {
             $np->add_ok( "Step $step_name failed (". $response->status_line(). ") but was ignored as configured" );
-        } elsif ($level == WARNING) {
-            $np->raise_status( WARNING );
-            $np->add_warning( "Step $step_name failed (". $response->status_line(). ")" );
-        } else {
-            $np->plugin_exit($level, "Step $step_name failed (". $response->status_line(). ")" );
+            next STEP;  # Lowered to non-fatal, go to next step
         }
+
+        # Set the level
+        $np->raise_status( $level );
+
+        # Add the error to the final output
+        $np->add_status( $level, "Step $step_name failed (". $response->status_line(). ")" );
+
+        # See if error is fatal or not
+        if ($level < CRITICAL) {
+            next STEP;
+        } else {
+            last STEP;
+        }
+    }
+
+
+    # ----------------------------------------------
+    # Process result in case of success of this step
+    # ----------------------------------------------
+
+    writepage($step_name, $response->decoded_content() );
+
+    # Add perfdata regardless of the other conditions
+    $np->add_perfdata( label => "Step_${step_name}_duration", value => $duration, uom => "s", warning => $warn, critical => $crit );
+
+    # First of all, check if the result matches the pattern (if provided).
+    # Not matching the patters is a fatal error, unless the error level was lowered
+    # by using "on_grep_failure"
+    if ($step->has_pattern()) {
+
+        debug "Step $step_name has pattern: ". $step->pattern();
+
+        if (! ($response->decoded_content() =~ $step->pattern()) ) {
+
+            debug "Pattern did not match!";
+
+            my $level = $step->on_grep_failure();
+
+            if ($level == OK) {
+                $np->add_ok( "Pattern <". $step->pattern(). "> not matched at step $step_name but ignored as configured" );
+            } else {
+                $np->raise_status( $level );
+                $np->add_status( $level, "Pattern <". $step->pattern(). "> not matched at step $step_name" );
+            }
+
+            # See if error is fatal or not
+            last STEP
+                if $level > WARNING;
+        }
+    }
+
+    # Check step timing
+    my $status = $np->check_threshold( check => $duration, warning => $warn, critical => $crit );
+
+    if ($status == OK) {
+        $np->add_ok( "Step $step_name took ${duration}s" );
+    } elsif ($status == WARNING) {
+        $np->add_warning( "Step $step_name took ${duration}s > ${warn}s" );
+    } elsif ($status == CRITICAL) {
+        $np->add_critical( "Step $step_name took ${duration}s > ${crit}s" );
     }
 
 }
