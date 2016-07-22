@@ -44,6 +44,10 @@
 #           - Added grep_re|grep_str options to configuration file, along with
 #             on_grep_failure.
 #
+#       2016-07-22T09:21:12+0200 v1.4.1
+#           - Modified default behaviour in case of pattern-matching-failed to
+#             a fatal error (immediate exit on match failure, unless severity
+#             is lowered using on_grep_failure).
 #
 #
 
@@ -750,7 +754,7 @@ check_end2end.pl - Simple configurable end-to-end probe plugin for Nagios
 
 =head1 VERSION
 
-This is the documentation for check_end2end.pl v1.4.0
+This is the documentation for check_end2end.pl v1.4.1
 
 
 =head1 SYNOPSYS
@@ -950,7 +954,8 @@ string.
 C<grep_re> is the same as C<grep_str>, but the given pattern is assumed to be
 a regexp, and is quoted using the regexp quoting operator C<qr{}>.
 
-If a string was not found in a step, the following steps will still be performed.
+If a string was not found in a step, and the level of this event is higher than
+WARNING, the event is treated as a fatal failure and the check stops.
 
 
 =item * B<on_grep_failure>
@@ -958,7 +963,10 @@ If a string was not found in a step, the following steps will still be performed
 C<on_grep_failure> specifies the status level in case the C<grep_str|grep_re>
 was not found inside response (decoded) body. It's only meaningful if
 either C<grep_str> or C<grep_re> was specified. The default is to treat the
-event as a CRITICAL.
+event as a CRITICAL. Criticalty levels of UNKNOWN and CRITICAL cause the check
+to stop in case of pattern not matched; criticalty levels of WARNING and OK
+cause the problem to be reported but the check will go on performing following
+steps (if any).
 
 =back
 
@@ -1057,6 +1065,12 @@ Giacomo Montagner, <kromg at entirelyunlike.net>,
 Please report any bug at L<https://github.com/kromg/nagios-plugins/issues>. If
 you have any patch/contribution, feel free to fork git repository and submit a
 pull request with your modifications.
+
+=head2 Contributors:
+
+* Aurel Schwarzentruber
+
+
 
 
 
