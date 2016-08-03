@@ -44,13 +44,17 @@
 #           - Added grep_re|grep_str options to configuration file, along with
 #             on_grep_failure.
 #
+#       2016-07-22T09:21:12+0200 v1.4.1
+#           - Modified default behaviour in case of pattern-matching-failed to
+#             a fatal error (immediate exit on match failure, unless severity
+#             is lowered using on_grep_failure).
 #
 #
 
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(1.4.0);
+use version; our $VERSION = qv(1.4.1);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
@@ -299,6 +303,7 @@ if ($opts->timeout()) {
 }
 
 my $totDuration = 0;
+STEP:
 for my $step_name ( @step_names ) {
 
     debug "Performing step: ", $step_name;
@@ -332,43 +337,79 @@ for my $step_name ( @step_names ) {
     my $warn = $warns->get( $step_name );
     my $crit = $crits->get( $step_name );
 
-    if ($response->is_success) {
 
-        writepage($step_name, $response->decoded_content() );
+    # -----------------------------------------
+    # Process result in case of failure of step
+    # -----------------------------------------
 
-        $np->add_perfdata( label => "Step_${step_name}_duration", value => $duration, uom => "s", warning => $warn, critical => $crit );
-        my $status = $np->check_threshold( check => $duration, warning => $warn, critical => $crit );
-
-        if ($status == OK) {
-            $np->add_ok( "Step $step_name took ${duration}s" );
-        } elsif ($status == WARNING) {
-            $np->add_warning( "Step $step_name took ${duration}s > ${warn}s" );
-        } elsif ($status == CRITICAL) {
-            $np->add_critical( "Step $step_name took ${duration}s > ${crit}s" );
-        }
-
-        if ($step->has_pattern()) {
-            $status = ($response->decoded_content() =~ $step->pattern)
-                      ?   OK
-                      :   $step->on_grep_failure();
-            debug "Grep ", $step->pattern(), ": ", $status;
-            if ($status != OK) {
-                $np->add_status($status, qq{Configured pattern not found at step "$step_name"});
-            }
-        }
-    }
-    else {
+    if (! $response->is_success) {
 
         my $level = $step->on_failure();
 
         if ($level == OK) {
             $np->add_ok( "Step $step_name failed (". $response->status_line(). ") but was ignored as configured" );
-        } elsif ($level == WARNING) {
-            $np->raise_status( WARNING );
-            $np->add_warning( "Step $step_name failed (". $response->status_line(). ")" );
-        } else {
-            $np->plugin_exit($level, "Step $step_name failed (". $response->status_line(). ")" );
+            next STEP;  # Lowered to non-fatal, go to next step
         }
+
+        # Set the level
+        $np->raise_status( $level );
+
+        # Add the error to the final output
+        $np->add_status( $level, "Step $step_name failed (". $response->status_line(). ")" );
+
+        # See if error is fatal or not
+        if ($level < CRITICAL) {
+            next STEP;
+        } else {
+            last STEP;
+        }
+    }
+
+
+    # ----------------------------------------------
+    # Process result in case of success of this step
+    # ----------------------------------------------
+
+    writepage($step_name, $response->decoded_content() );
+
+    # Add perfdata regardless of the other conditions
+    $np->add_perfdata( label => "Step_${step_name}_duration", value => $duration, uom => "s", warning => $warn, critical => $crit );
+
+    # First of all, check if the result matches the pattern (if provided).
+    # Not matching the patters is a fatal error, unless the error level was lowered
+    # by using "on_grep_failure"
+    if ($step->has_pattern()) {
+
+        debug "Step $step_name has pattern: ". $step->pattern();
+
+        if (! ($response->decoded_content() =~ $step->pattern()) ) {
+
+            debug "Pattern did not match!";
+
+            my $level = $step->on_grep_failure();
+
+            if ($level == OK) {
+                $np->add_ok( "Pattern <". $step->pattern(). "> not matched at step $step_name but ignored as configured" );
+            } else {
+                $np->raise_status( $level );
+                $np->add_status( $level, "Pattern <". $step->pattern(). "> not matched at step $step_name" );
+            }
+
+            # See if error is fatal or not
+            last STEP
+                if $level > WARNING;
+        }
+    }
+
+    # Check step timing
+    my $status = $np->check_threshold( check => $duration, warning => $warn, critical => $crit );
+
+    if ($status == OK) {
+        $np->add_ok( "Step $step_name took ${duration}s" );
+    } elsif ($status == WARNING) {
+        $np->add_warning( "Step $step_name took ${duration}s > ${warn}s" );
+    } elsif ($status == CRITICAL) {
+        $np->add_critical( "Step $step_name took ${duration}s > ${crit}s" );
     }
 
 }
@@ -726,7 +767,7 @@ check_end2end.pl - Simple configurable end-to-end probe plugin for Nagios
 
 =head1 VERSION
 
-This is the documentation for check_end2end.pl v1.4.0
+This is the documentation for check_end2end.pl v1.4.1
 
 
 =head1 SYNOPSYS
@@ -933,7 +974,8 @@ string.
 C<grep_re> is the same as C<grep_str>, but the given pattern is assumed to be
 a regexp, and is quoted using the regexp quoting operator C<qr{}>.
 
-If a string was not found in a step, the following steps will still be performed.
+If a string was not found in a step, and the level of this event is higher than
+WARNING, the event is treated as a fatal failure and the check stops.
 
 
 =item * B<on_grep_failure>
@@ -941,7 +983,10 @@ If a string was not found in a step, the following steps will still be performed
 C<on_grep_failure> specifies the status level in case the C<grep_str|grep_re>
 was not found inside response (decoded) body. It's only meaningful if
 either C<grep_str> or C<grep_re> was specified. The default is to treat the
-event as a CRITICAL.
+event as a CRITICAL. Criticalty levels of UNKNOWN and CRITICAL cause the check
+to stop in case of pattern not matched; criticalty levels of WARNING and OK
+cause the problem to be reported but the check will go on performing following
+steps (if any).
 
 =back
 
@@ -1040,6 +1085,12 @@ Giacomo Montagner, <kromg at entirelyunlike.net>,
 Please report any bug at L<https://github.com/kromg/nagios-plugins/issues>. If
 you have any patch/contribution, feel free to fork git repository and submit a
 pull request with your modifications.
+
+=head2 Contributors:
+
+* Aurel Schwarzentruber
+
+
 
 
 
