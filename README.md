@@ -9,6 +9,8 @@ check_end2end.pl: plugin to perform a web navigation (with time thresholds)
 
         - Config::General
 
+        - HTTP::Headers
+
         - LWP::UserAgent
 
         - Monitoring::Plugin
@@ -16,5 +18,9 @@ check_end2end.pl: plugin to perform a web navigation (with time thresholds)
         - URI::URL
 
         - (optional, for debug) Data::Dumper
+
+    If you want to specify a proxy for scheme XXX (for example: http), you need to install:
+
+        - LWP::Protocol::XXX  (with XXX == proxyed scheme)
 
 

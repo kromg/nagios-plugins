@@ -49,19 +49,21 @@
 #             a fatal error (immediate exit on match failure, unless severity
 #             is lowered using on_grep_failure).
 #
+#       2016-08-03T03:21:53+02:00 v1.5.0
+#           - Added support for proxy
+#           - Added support for basic http authentication
 #
-
+#
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(1.4.1);
+use version; our $VERSION = qv(1.5.0);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
 
 use Config::General;
 use Monitoring::Plugin;
-use LWP::UserAgent;
 use Time::HiRes qw(time);
 
 use subs qw(
@@ -78,13 +80,13 @@ use subs qw(
 # ------------------------------------------------------------------------------
 #  Globals
 # ------------------------------------------------------------------------------
-my $plugin_name = basename( $0 );
+our $plugin_name = basename( $0 );
 
 
 
 
 # ------------------------------------------------------------------------------
-#  Command line initialization and parsing
+#  Command line initialization
 # ------------------------------------------------------------------------------
 
 # This plugin's initialization - see https://metacpan.org/pod/Monitoring::Plugin
@@ -192,6 +194,23 @@ $np->add_arg(
     help => qq{-M, --manual\n   Show plugin manual (requires perldoc executable).},
 );
 
+
+
+
+# It would be easy to do this and then die() peacefully from everywhere it's
+# required, but it would break any eval{} in the code from here to everywhere,
+# so it cannot be done. I document it here so no one else is tempted to do
+# this.
+# $SIG{ __DIE__ } = sub {
+#   $np->plugin_die(@_);
+# };
+
+
+
+# ------------------------------------------------------------------------------
+#  Command line parsing
+# ------------------------------------------------------------------------------
+
 # Parse @ARGV and process standard arguments (e.g. usage, help, version)
 $np->getopts;
 my $opts = $np->opts();
@@ -263,24 +282,16 @@ if ($conf->exists("Monitoring::Plugin::shortname")) {
 
 
 
-
-
 # ------------------------------------------------------------------------------
-#  MAIN :: Do the check
+#  Global configurations
 # ------------------------------------------------------------------------------
 
-# Perform each configured step
-my $ua = LWP::UserAgent->new(
-    agent      => $conf->exists("LWP::UserAgent::agent") ? $conf->value("LWP::UserAgent::agent") : "$plugin_name",
-    cookie_jar => { },
-    # TODO: be more configurable
-);
+# Prepare user agent for the requests
+my $ua = Monitoring::Plugin::End2end::UserAgent->new( $conf )
+    or $np->plugin_die("Error initializing UserAgent: ". $Monitoring::Plugin::End2end::UserAgent::reason);
+   $ua->env_proxy() if $opts->useEnvProxy();
 
-# Get proxy settings form environment variables if requested
-if ($opts->useEnvProxy()) {
-    $ua->env_proxy();
-}
-
+# Get the steps from configuration
 my $steps = Steps->new( $conf->hash("Step") );
 
 # Check for thresholds before performing steps
@@ -288,12 +299,14 @@ my @step_names = $steps->list();
 my $num_steps = @step_names;
 
 my $warns = Thresholds->new( $opts->warning(),  @step_names );
-debug "WARNING THRESHOLDS: ", ddump([$warns]);
+debug "WARNING THRESHOLDS: ", ddump([$warns], ['warns']);
 my $crits = Thresholds->new( $opts->critical(), @step_names );
-debug "CRITICAL THRESHOLDS: ", ddump([$crits]);
+debug "CRITICAL THRESHOLDS: ", ddump([$crits], ['crits']);
 
 
-# Now for the real check
+# ------------------------------------------------------------------------------
+#  MAIN :: Do the check
+# ------------------------------------------------------------------------------
 if ($opts->timeout()) {
     $SIG{ALRM} = sub {
         $np->plugin_die("Operation timed out after ". $opts->timeout(). "s" );
@@ -303,6 +316,7 @@ if ($opts->timeout()) {
 }
 
 my $totDuration = 0;
+# Perform each configured step
 STEP:
 for my $step_name ( @step_names ) {
 
@@ -315,6 +329,8 @@ for my $step_name ( @step_names ) {
     debug "Data: ", ddump([ $step->data() ])
         if $step->data();
     debug "Method: ", $step->method();
+    debug "Auth:   ", join(":", $step->auth_basic_credentials())
+        if $step->has_basic_auth;
 
     my $response;
     my $method = $step->method();
@@ -587,6 +603,7 @@ sub new {
     my $class = shift;
     return unless ref( $_[0] ) && ref( $_[0] ) eq 'HASH';
 
+    # Start from the base configuration (if present)
     my $step = {};
 
     # In case of errors, do not initialize this object
@@ -632,6 +649,15 @@ sub new {
         exists $step->{on_grep_failure} or return;
     }
 
+    # Parse basic authentication if present
+    if (exists( $_[0]->{auth_basic_user} )) {
+        my $cred = [
+            $_[0]->{auth_basic_user},
+            $_[0]->{auth_basic_password} || ''
+        ];
+        $step->{auth_basic_credentials} = $cred;
+    }
+
     # Parse method if present, otherwise force it to "get"
     $step->{method} = $_[0]->{method} ? lc( $_[0]->{method} ) : 'get';
 
@@ -664,9 +690,14 @@ sub url {
 }
 
 sub data {
-    return unless $_[0]->{data};
+    return unless $_[0]->has_data();
+    # Copy data, do not return internal reference
     my %data = %{ $_[0]->{data} };
     return \%data;
+}
+
+sub has_data {
+    return exists( $_[0]->{data} ) && defined( $_[0]->{ data } );
 }
 
 sub pattern {
@@ -687,6 +718,18 @@ sub on_failure {
 
 sub on_grep_failure {
     return $_[0]->{on_grep_failure};
+}
+
+sub auth_basic_credentials {
+    return unless $_[0]->has_basic_auth();
+    return @{ $_[0]->{auth_basic_credentials} };
+}
+
+sub has_basic_auth {
+    return (
+        exists( $_[0]->{auth_basic_credentials} ) and
+        ref( $_[0]->{auth_basic_credentials} ) eq 'ARRAY'
+    );
 }
 
 
@@ -754,6 +797,95 @@ sub get {
 
 
 
+
+
+
+
+################################################################################
+# User Agent
+################################################################################
+
+package Monitoring::Plugin::End2end::UserAgent;
+
+use HTTP::Headers;
+use LWP::UserAgent;
+use parent ("LWP::UserAgent");
+
+sub new {
+    my $class = shift;
+    my $conf  = shift;
+
+    my $hh = HTTP::Headers->new();
+    my $self = $class->SUPER::new(
+        agent           => $conf->exists("LWP::UserAgent::agent") ? $conf->value("LWP::UserAgent::agent") : $main::plugin_name,
+        cookie_jar      => { },
+        default_headers => $hh,
+        # TODO: be more configurable
+    );
+
+    $self->{_http_headers} = $hh;
+
+    $self->_export_proxy($conf)
+        or return;
+    main::debug "Proxy conf done.";
+    $self->_get_basic_auth($conf)
+        or return;
+    main::debug "Basic auth conf done.";
+
+    return $self;
+}
+
+sub _export_proxy {
+    my ($self, $conf) = @_;
+    return 1
+        unless $conf->exists("LWP::UserAgent::proxy");
+
+    # Ensure there are no conflicting proxies in the environment
+    for my $var (keys %ENV) {
+        $var =~ /_proxy$/i && delete $ENV{ $var };
+    }
+
+    # Export proxy configuration into environment
+    my $proxy = $conf->value("LWP::UserAgent::proxy");
+    my $user  = $conf->exists("LWP::UserAgent::proxy::user")      ? $conf->value("LWP::UserAgent::proxy::user")     : '';
+    my $pass  = $conf->exists("LWP::UserAgent::proxy::password")  ? $conf->value("LWP::UserAgent::proxy::password") : '';
+    my @schemes = $conf->exists("LWP::UserAgent::proxy::schemes") ?
+        split(/\s*,\s*/, $conf->value("LWP::UserAgent::proxy::schemes")) :
+        qw(http);
+    for my $s (@schemes) {
+        $s = uc($s);
+        $ENV{$s."_PROXY"} = $proxy;
+        $ENV{$s."_PROXY_USERNAME"} = $user if $user;
+        $ENV{$s."_PROXY_PASSWORD"} = $pass if $pass;
+        main::debug "Using proxy: ". $proxy. " for scheme: ". $s;
+    }
+
+    $self->env_proxy();
+    return 1;
+}
+
+sub _get_basic_auth {
+    my ($self, $conf) = @_;
+    return 1
+        unless $conf->exists("HTTP::Headers::authorization_basic::user");
+
+    unless ($conf->exists("HTTP::Headers::authorization_basic::password")) {
+        our $reason = "No password specified for basic http authentication";
+        return 0;
+    }
+
+    $self->{_http_headers}->authorization_basic(
+        $conf->value("HTTP::Headers::authorization_basic::user"),
+        $conf->value("HTTP::Headers::authorization_basic::password")
+    );
+
+    return 1;
+}
+
+
+
+
+
 ###############################################################################
 ## MANUAL
 ###############################################################################
@@ -767,7 +899,7 @@ check_end2end.pl - Simple configurable end-to-end probe plugin for Nagios
 
 =head1 VERSION
 
-This is the documentation for check_end2end.pl v1.4.1
+This is the documentation for check_end2end.pl v1.5.0
 
 
 =head1 SYNOPSYS
@@ -875,9 +1007,18 @@ Here's a sample configuration file for this plugin
 
     # Optional - Specify proxy settings in the configuration file
     LWP::UserAgent::proxy           = http://proxy.example.com:3128/
-    LWP::UserAgent::proxy::schemes  = http, https
+        # Optional-optional: defaults to proxy only http
+    LWP::UserAgent::proxy::schemes  = http, https       # Comma-separated list
+        # Optional-optional: specify credentials if your proxy requires user
+        # authentication
     LWP::UserAgent::proxy::user     = proxyuser         # If required
     LWP::UserAgent::proxy::password = proxypassword     # If required
+
+    ########## Optional HTTP parameters
+    #
+    # Basic HTTP Authentication credentials
+    HTTP::Headers::authorization_basic::user     = me
+    HTTP::Headers::authorization_basic::password = I_said_it_s_me
 
 
 
@@ -916,6 +1057,7 @@ Here's a sample configuration file for this plugin
         url = "$BASE_URL/pri/home.html"
         method = GET
     </Step>
+
 
 
 The configuration file is made up of one or many named <Step> blocks, each step
@@ -987,6 +1129,7 @@ event as a CRITICAL. Criticalty levels of UNKNOWN and CRITICAL cause the check
 to stop in case of pattern not matched; criticalty levels of WARNING and OK
 cause the problem to be reported but the check will go on performing following
 steps (if any).
+
 
 =back
 
@@ -1085,6 +1228,7 @@ Giacomo Montagner, <kromg at entirelyunlike.net>,
 Please report any bug at L<https://github.com/kromg/nagios-plugins/issues>. If
 you have any patch/contribution, feel free to fork git repository and submit a
 pull request with your modifications.
+
 
 =head2 Contributors:
 
