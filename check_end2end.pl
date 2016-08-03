@@ -49,12 +49,16 @@
 #             a fatal error (immediate exit on match failure, unless severity
 #             is lowered using on_grep_failure).
 #
+#       2016-08-03T03:21:53+02:00 v1.5.0
+#           - Added support for proxy
+#           - Added support for basic http authentication
+#
 #
 
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(1.4.1);
+use version; our $VERSION = qv(1.5.0);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
@@ -264,13 +268,11 @@ if ($conf->exists("Monitoring::Plugin::shortname")) {
 
 
 
-
-
 # ------------------------------------------------------------------------------
-#  MAIN :: Do the check
+#  Global configurations
 # ------------------------------------------------------------------------------
 
-# Perform each configured step
+# Prepare user agent for the requests
 my $hh = HTTP::Headers->new();
 my $ua = LWP::UserAgent->new(
     agent           => $conf->exists("LWP::UserAgent::agent") ? $conf->value("LWP::UserAgent::agent") : "$plugin_name",
@@ -282,6 +284,8 @@ my $ua = LWP::UserAgent->new(
 # Get proxy settings form environment variables if requested
 if ($opts->useEnvProxy()) {
     $ua->env_proxy();
+
+# Get proxy settings from configuration file if they are present
 } elsif ($conf->exists("LWP::UserAgent::proxy")) {
 
     # Ensure there are no conflicting proxies in the environment
@@ -308,19 +312,35 @@ if ($opts->useEnvProxy()) {
     $ua->env_proxy();
 }
 
-my $steps = Steps->new( $conf->hash("Step") );
+
+# Get configuration of basic http authentication if there is a global one
+my $base_configuration = {}; # For the initialization of each step
+if ($conf->exists("HTTP::Headers::authorization_basic::user")) {
+    $base_configuration->{auth_basic_user}    = $conf->value("HTTP::Headers::authorization_basic::user");
+
+    unless($conf->exists("HTTP::Headers::authorization_basic::password")) {
+       $np->plugin_die("basic HTTP Authentication password not provided in configuration");
+    }
+
+    $base_configuration->{auth_basic_password} = $conf->value("HTTP::Headers::authorization_basic::password");
+}
+debug ddump([$base_configuration], ['base_configuration']);
+
+my $steps = Steps->new( $conf->hash("Step"), $base_configuration );
 
 # Check for thresholds before performing steps
 my @step_names = $steps->list();
 my $num_steps = @step_names;
 
 my $warns = Thresholds->new( $opts->warning(),  @step_names );
-debug "WARNING THRESHOLDS: ", ddump([$warns]);
+debug "WARNING THRESHOLDS: ", ddump([$warns], ['warns']);
 my $crits = Thresholds->new( $opts->critical(), @step_names );
-debug "CRITICAL THRESHOLDS: ", ddump([$crits]);
+debug "CRITICAL THRESHOLDS: ", ddump([$crits], ['crits']);
 
 
-# Now for the real check
+# ------------------------------------------------------------------------------
+#  MAIN :: Do the check
+# ------------------------------------------------------------------------------
 if ($opts->timeout()) {
     $SIG{ALRM} = sub {
         $np->plugin_die("Operation timed out after ". $opts->timeout(). "s" );
@@ -330,6 +350,7 @@ if ($opts->timeout()) {
 }
 
 my $totDuration = 0;
+# Perform each configured step
 STEP:
 for my $step_name ( @step_names ) {
 
@@ -338,7 +359,7 @@ for my $step_name ( @step_names ) {
     # Cleaning any existent authentication credentials
     $hh->authorization_basic('', '');
 
-    my $step = $steps->step( $step_name )
+    my $step = $steps->step( $step_name, $base_configuration )
         or $np->plugin_die("Malformed configuration file -- cannot proceed on step $step_name; error token was: ". $Step::reason);
 
     debug "URL: ", $step->url();
@@ -622,8 +643,11 @@ use Monitoring::Plugin;
 sub new {
     my $class = shift;
     return unless ref( $_[0] ) && ref( $_[0] ) eq 'HASH';
+    main::debug main::ddump([\@_]);
+    return unless ref( $_[1] ) && ref( $_[1] ) eq 'HASH';
 
-    my $step = {};
+    # Start from the base configuration (if present)
+    my $step = { %{ $_[1] } };
 
     # In case of errors, do not initialize this object
     # (will cause the plugin to die with an error)
@@ -768,7 +792,7 @@ sub new {
 
 
 sub step {
-    return Step->new( $_[0]->{ $_[1] } );
+    return Step->new( $_[0]->{ $_[1] }, $_[0]->{base_configuration} || {} );
 }
 
 sub list {
@@ -829,7 +853,7 @@ check_end2end.pl - Simple configurable end-to-end probe plugin for Nagios
 
 =head1 VERSION
 
-This is the documentation for check_end2end.pl v1.4.1
+This is the documentation for check_end2end.pl v1.5.0
 
 
 =head1 SYNOPSYS
@@ -979,6 +1003,14 @@ Here's a sample configuration file for this plugin
         method = GET
     </Step>
 
+
+
+    # Or, to check for a private page with basic http authentication:
+    <Step "00 - some private portal">
+        url = http://10.0.0.1:8080/private
+        auth_basic_user = me
+        auth_basic_password = Isaiditsme
+    </Step>
 
 The configuration file is made up of one or many named <Step> blocks, each step
 is performed and checked for success. Steps are B<ordered alphabetically>, so
