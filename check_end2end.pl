@@ -62,6 +62,7 @@ use File::Basename qw(basename);
 use Config::General;
 use Monitoring::Plugin;
 use LWP::UserAgent;
+use HTTP::Headers;
 use Time::HiRes qw(time);
 
 use subs qw(
@@ -270,14 +271,40 @@ if ($conf->exists("Monitoring::Plugin::shortname")) {
 # ------------------------------------------------------------------------------
 
 # Perform each configured step
+my $hh = HTTP::Headers->new();
 my $ua = LWP::UserAgent->new(
-    agent      => $conf->exists("LWP::UserAgent::agent") ? $conf->value("LWP::UserAgent::agent") : "$plugin_name",
-    cookie_jar => { },
+    agent           => $conf->exists("LWP::UserAgent::agent") ? $conf->value("LWP::UserAgent::agent") : "$plugin_name",
+    cookie_jar      => { },
+    default_headers => $hh,
     # TODO: be more configurable
 );
 
 # Get proxy settings form environment variables if requested
 if ($opts->useEnvProxy()) {
+    $ua->env_proxy();
+} elsif ($conf->exists("LWP::UserAgent::proxy")) {
+
+    # Ensure there are no conflicting proxies in the environment
+    for my $var (keys %ENV) {
+        $var =~ /_proxy$/i && delete $ENV{ $var };
+    }
+
+    # Export proxy configuration into environment
+    my $proxy = $conf->value("LWP::UserAgent::proxy");
+    my $user  = $conf->exists("LWP::UserAgent::proxy::user")      ? $conf->value("LWP::UserAgent::proxy::user")     : '';
+    my $pass  = $conf->exists("LWP::UserAgent::proxy::password")  ? $conf->value("LWP::UserAgent::proxy::password") : '';
+    my @schemes = $conf->exists("LWP::UserAgent::proxy::schemes") ?
+        split(/\s*,\s*/, $conf->value("LWP::UserAgent::proxy::schemes")) :
+        qw(http https ftp);
+    for my $s (@schemes) {
+        $s = uc($s);
+        $ENV{$s."_PROXY"} = $proxy;
+        $ENV{$s."_PROXY_USERNAME"} = $user if $user;
+        $ENV{$s."_PROXY_PASSWORD"} = $pass if $pass;
+        debug "Using proxy: ". $proxy. " for scheme: ". $s;
+    }
+
+    # Get proxy configuration from environment
     $ua->env_proxy();
 }
 
@@ -308,6 +335,9 @@ for my $step_name ( @step_names ) {
 
     debug "Performing step: ", $step_name;
 
+    # Cleaning any existent authentication credentials
+    $hh->authorization_basic('', '');
+
     my $step = $steps->step( $step_name )
         or $np->plugin_die("Malformed configuration file -- cannot proceed on step $step_name; error token was: ". $Step::reason);
 
@@ -315,6 +345,12 @@ for my $step_name ( @step_names ) {
     debug "Data: ", ddump([ $step->data() ])
         if $step->data();
     debug "Method: ", $step->method();
+    debug "Auth:   ", join(":", $step->auth_basic_credentials())
+        if $step->has_basic_auth;
+
+    # Inserting authentication credentials if any
+    $hh->authorization_basic( $step->auth_basic_credentials() )
+        if $step->has_basic_auth;
 
     my $response;
     my $method = $step->method();
@@ -632,6 +668,15 @@ sub new {
         exists $step->{on_grep_failure} or return;
     }
 
+    # Parse basic authentication if present
+    if (exists( $_[0]->{auth_basic_user} )) {
+        my $cred = [
+            $_[0]->{auth_basic_user},
+            $_[0]->{auth_basic_password} || ''
+        ];
+        $step->{auth_basic_credentials} = $cred;
+    }
+
     # Parse method if present, otherwise force it to "get"
     $step->{method} = $_[0]->{method} ? lc( $_[0]->{method} ) : 'get';
 
@@ -664,9 +709,14 @@ sub url {
 }
 
 sub data {
-    return unless $_[0]->{data};
+    return unless $_[0]->has_data();
+    # Copy data, do not return internal reference
     my %data = %{ $_[0]->{data} };
     return \%data;
+}
+
+sub has_data {
+    return exists( $_[0]->{data} ) && defined( $_[0]->{ data } );
 }
 
 sub pattern {
@@ -687,6 +737,18 @@ sub on_failure {
 
 sub on_grep_failure {
     return $_[0]->{on_grep_failure};
+}
+
+sub auth_basic_credentials {
+    return unless $_[0]->has_basic_auth();
+    return @{ $_[0]->{auth_basic_credentials} };
+}
+
+sub has_basic_auth {
+    return (
+        exists( $_[0]->{auth_basic_credentials} ) and
+        ref( $_[0]->{auth_basic_credentials} ) eq 'ARRAY'
+    );
 }
 
 

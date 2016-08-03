@@ -9,6 +9,8 @@ check_end2end.pl: plugin to perform a web navigation (with time thresholds)
 
         - Config::General
 
+        - HTTP::Headers
+
         - LWP::UserAgent
 
         - Monitoring::Plugin
