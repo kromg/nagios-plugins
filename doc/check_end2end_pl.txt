@@ -1,0 +1,34 @@
+check_end2end.pl is a plugin allowing automation of web navigation through the
+definition of a list of steps to be performed.
+It is based upon LWP::UserAgent and Monitoring::Plugin modules, available from
+CPAN.
+
+It checks overall status of the process, can check total and/or individual
+duration of steps and search for strings/regexps inside response body.
+
+Since version 1.5.0 check_end2end.pl can make requests through proxy and
+supports basic http authentication.
+
+License: Perl 5 license.
+
+check_end2end.pl comes with a MANUAL PAGE.
+TO SEE FULL DOCUMENTATION:
+  - run
+        perldoc check_end2end.pl
+  - or run
+        check_end2end.pl -M
+    (the latter may not work if you don't have all the prerequisites installed).
+
+All the steps to be performed are configured in a separate configuration file,
+specified with the "-f" flag. The configuration file format is similar to the
+one used by apache httpd:
+
+<Step "StepName">
+   url = http://...
+   ...
+</Step>
+
+specify as many steps as you want, they will be performed in alphabetical order.
+See the MAN PAGE for the full list of configuration parameters and the manual of
+Config::General for the details of the format.
+
