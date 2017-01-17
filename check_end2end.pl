@@ -53,6 +53,14 @@
 #           - Added support for proxy
 #           - Added support for basic http authentication
 #
+#       2017-01-17T14:03:08+01:00 v1.5.1
+#           - Added .html extension to the name of the files generated via the
+#             -D flag.
+#
+#       2017-01-17T15:26:33+01:00 v1.6.0
+#           - Added grep_err_str/grep_err_re/on_err_grep_match parameters to the
+#             configuration, to allow for a negative (error) string match.
+#
 #
 
 use strict;
@@ -235,7 +243,7 @@ if ($opts->dumpPages) {
         debug qq{Dumping step "$_[0]" to }. $opts->dumpPages();
         Path::Tiny::path(
             File::Spec->catfile(
-                $opts->dumpPages(), $_[0]
+                $opts->dumpPages(), $_[0] . ".html"
             )
         )->spew( $_[1] );
     };
@@ -391,12 +399,39 @@ for my $step_name ( @step_names ) {
     # Add perfdata regardless of the other conditions
     $np->add_perfdata( label => "Step_${step_name}_duration", value => $duration, uom => "s", warning => $warn, critical => $crit );
 
-    # First of all, check if the result matches the pattern (if provided).
+    # First of all, check if the result matches the NEGATIVE pattern (if provided).
+    # Matching the negative pattern is a fatal error, unless the error level was lowered
+    # using "on_err_grep_match".
+    if ($step->has_neg_pattern()) {
+
+        debug "Step $step_name has NEGATIVE pattern: ". $step->neg_pattern();
+
+        if ( ($response->decoded_content() =~ $step->neg_pattern()) ) {
+
+            debug "Negative pattern did match!";
+
+            my $level = $step->on_err_grep_match();
+
+            if ($level == OK) {
+                $np->add_ok( "Pattern <". $step->neg_pattern(). "> matched at step $step_name but ignored as configured" );
+            } else {
+                $np->raise_status( $level );
+                $np->add_status( $level, "Pattern <". $step->neg_pattern(). "> matched at step $step_name" );
+            }
+
+            # See if error is fatal or not
+            last STEP
+                if $level > WARNING;
+        }
+    }
+
+
+    # Second, check if the result matches the POSITIVE pattern (if provided).
     # Not matching the patters is a fatal error, unless the error level was lowered
-    # by using "on_grep_failure"
+    # using "on_grep_failure".
     if ($step->has_pattern()) {
 
-        debug "Step $step_name has pattern: ". $step->pattern();
+        debug "Step $step_name has POSITIVE pattern: ". $step->pattern();
 
         if (! ($response->decoded_content() =~ $step->pattern()) ) {
 
@@ -601,7 +636,11 @@ use Monitoring::Plugin;
 
 sub new {
     my $class = shift;
-    return unless ref( $_[0] ) && ref( $_[0] ) eq 'HASH';
+
+    unless( ref( $_[0] ) && ref( $_[0] ) eq 'HASH' ) {
+        our $reason = "invalid initialization parameters for Step";
+        return;
+    }
 
     # Start from the base configuration (if present)
     my $step = {};
@@ -624,10 +663,34 @@ sub new {
     # Parse on_failure directive if present, otherwise force it
     # to CRITICAL
     if (exists( $_[0]->{on_failure} )) {
-        $step->{on_failure} = _parse( 'on_failure', delete $_[0]->{on_failure} );
-        defined $step->{on_failure} or return;
+        unless (defined( $step->{on_failure} = _parse( 'on_failure', delete $_[0]->{on_failure} ))) {
+            our $reason = "parsing 'on_failure' failed";
+            return;
+        }
     } else {
         $step->{on_failure} = CRITICAL;
+    }
+
+    # Parse grep_err_str/grep_err_re patterns if present
+    if (my $grep_err_re = delete $_[0]->{grep_err_re}) {
+        $step->{neg_pattern} = qr/$grep_err_re/;
+        $step->{on_err_grep_match} = CRITICAL;
+        $step->{has_neg_pattern} = 1;
+        delete $_[0]->{grep_err_str};   # grep_err_re supersedes grep_err_str
+    } elsif (my $grep_err_str = delete $_[0]->{grep_err_str}) {
+        $step->{neg_pattern} = quotemeta($grep_err_str);
+        $step->{on_err_grep_match} = CRITICAL;
+        $step->{has_neg_pattern} = 1;
+    }
+
+    # Parse on_err_grep_match if present
+    if (exists( $_[0]->{on_err_grep_match} )) {
+        main::debug "Parsing: ", $_[0]->{on_err_grep_match};
+        unless (defined( $step->{on_err_grep_match} = _parse( 'on_err_grep_match', delete $_[0]->{on_err_grep_match} ))) {
+            our $reason = "parsing 'on_err_grep_match' failed";
+            return;
+        }
+        main::debug "Parsed as: ", $step->{on_err_grep_match};
     }
 
     # Parse grep_str/grep_re patterns if present
@@ -635,6 +698,7 @@ sub new {
         $step->{pattern} = qr/$grep_re/;
         $step->{on_grep_failure} = CRITICAL;
         $step->{has_pattern} = 1;
+        delete $_[0]->{grep_str};   # grep_re supersedes grep_str
     } elsif (my $grep_str = delete $_[0]->{grep_str}) {
         $step->{pattern} = quotemeta($grep_str);
         $step->{on_grep_failure} = CRITICAL;
@@ -644,22 +708,23 @@ sub new {
     # Parse on_grep_failure if present
     if (exists( $_[0]->{on_grep_failure} )) {
         main::debug "Parsing: ", $_[0]->{on_grep_failure};
-        $step->{on_grep_failure} = _parse( 'on_grep_failure', delete $_[0]->{on_grep_failure} );
+        unless( defined( $step->{on_grep_failure} = _parse( 'on_grep_failure', delete $_[0]->{on_grep_failure} ) ) ) {
+            our $reason = "parsing 'on_grep_failure' failed";
+            return;
+        }
         main::debug "Parsed as: ", $step->{on_grep_failure};
-        exists $step->{on_grep_failure} or return;
     }
 
     # Parse basic authentication if present
     if (exists( $_[0]->{auth_basic_user} )) {
-        my $cred = [
-            $_[0]->{auth_basic_user},
-            $_[0]->{auth_basic_password} || ''
+        $step->{auth_basic_credentials} = [
+            delete $_[0]->{auth_basic_user},
+            delete $_[0]->{auth_basic_password} || ''
         ];
-        $step->{auth_basic_credentials} = $cred;
     }
 
     # Parse method if present, otherwise force it to "get"
-    $step->{method} = $_[0]->{method} ? lc( $_[0]->{method} ) : 'get';
+    $step->{method} = $_[0]->{method} ? lc( delete $_[0]->{method} ) : 'get';
 
     return bless( $step, $class );
 }
@@ -704,8 +769,16 @@ sub pattern {
     return $_[0]->{pattern};
 }
 
+sub neg_pattern {
+    return $_[0]->{neg_pattern};
+}
+
 sub has_pattern {
     return $_[0]->{has_pattern};
+}
+
+sub has_neg_pattern {
+    return $_[0]->{has_neg_pattern};
 }
 
 sub method {
@@ -718,6 +791,10 @@ sub on_failure {
 
 sub on_grep_failure {
     return $_[0]->{on_grep_failure};
+}
+
+sub on_err_grep_match {
+    return $_[0]->{on_err_grep_match};
 }
 
 sub auth_basic_credentials {
@@ -988,7 +1065,8 @@ speficies a warning threshold of 0.7s only for the first step.
 
 =head1 CONFIGURATION FILE FORMAT
 
-Here's a sample configuration file for this plugin
+Here's a sample configuration file for this plugin. If you want to quote
+strings, B<use double quotes>.
 
     #
     # login.cfg -- Configuration file for login check on www.example.com
@@ -1056,6 +1134,7 @@ Here's a sample configuration file for this plugin
     <Step "03 - Private login page">
         url = "$BASE_URL/pri/home.html"
         method = GET
+        grep_err_str = Wrong username or password
     </Step>
 
 
@@ -1105,7 +1184,37 @@ level of CRITICAL (default) or UNKNOWN will cause the check to stop as soon
 as the error happens and to exit reporting that severity level.
 
 
-=item * B<grep_str|grep_re>
+=item * B<grep_err_re|grep_err_str>
+
+B<NOTE>: C<grep_err_re> supersedes C<grep_err_str>, in case both are specified.
+
+C<grep_err_str> specifies an error string to be searched inside the response
+body. The default status in case the string is found is CRITICAL. This can be
+changed specifying C<on_err_grep_match> parameter. With C<grep_err_str> the
+string is enclosed between escaping regexp sequence: \Q...\E so it's treated as
+a literal string.
+
+C<grep_err_re> is the same as C<grep_err_str>, but the given pattern is assumed
+to be a regexp, and is quoted using the regexp quoting operator C<qr{}>.
+
+If an erorr string was found in a step, and the level of this event is higher
+than WARNING, the event is treated as a fatal failure and the check stops.
+
+
+=item * B<on_err_grep_match>
+
+C<on_err_grep_match> specifies the status level in case the
+C<grep_err_re|grep_err_str> was found inside response (decoded) body.
+It's only meaningful if either C<grep_err_re> or C<grep_err_str> was specified.
+The default is to treat the event as a CRITICAL. Criticalty levels of UNKNOWN
+and CRITICAL cause the check to stop in case of pattern matched;
+criticalty levels of WARNING and OK cause the problem to be reported but the
+check will go on performing following steps (if any).
+
+
+=item * B<grep_re|grep_str>
+
+B<NOTE>: C<grep_re> supersedes C<grep_str>, in case both are specified.
 
 C<grep_str> specifies a string to be searched inside the response body. The
 default status in case the string is not found is CRITICAL. This can be changed
