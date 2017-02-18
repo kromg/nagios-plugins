@@ -2,12 +2,28 @@
 
 Collection of plugins for Nagios.
 
+check_certificates.pl: plugin to verify expiration dates of SSL certificates.
+
+    Requires:
+
+        - Data::Dumper (only if run with -d)
+
+        - IO::Socket::SSL
+
+        - IO::Socket::SSL::Utils
+
+        - LWP::UserAgent
+
+        - Monitoring::Plugin
+
 
 check_end2end.pl: plugin to perform a web navigation (with time thresholds)
 
     Requires:
 
         - Config::General
+
+        - Data::Dumper (only if run with -d)
 
         - HTTP::Headers
 
