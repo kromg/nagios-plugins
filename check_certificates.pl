@@ -34,8 +34,9 @@ use IO::Socket::SSL;
 use LWP::UserAgent;
 
 use constant                DEFAULT_PORT    =>       443;
+
 use constant                PROXY_PORT      =>      8080;
-use constant                PROXY_SCHEME    =>      'http';
+use constant                PROXY_SCHEMES   =>      [ qw( https ) ];
 
 use subs qw(
     debug
@@ -52,6 +53,7 @@ use subs qw(
 #  Globals
 # ------------------------------------------------------------------------------
 our $plugin_name = basename( $0 );
+my $proxy_spec   = '[<scheme>://][<user>:<password>@]<proxy>[:<port>]';
 
 
 
@@ -65,8 +67,7 @@ our $plugin_name = basename( $0 );
 my $np = Monitoring::Plugin::CheckCerts->new(
     usage => "Usage: %s [-v|--verbose] [-t <timeout>] [-d|--debug] "
             . "[-h|--help] [-M|--manual] "
-            . "[-P|--useEnvProxy] [--proxyHost=<proxy>] [--proxyPort=<port>] [--proxyScheme=<http|https>]"
-            . "[--proxyUser=<user>] [--proxyPassword=<password>]"
+            . "[-P|--useEnvProxy] [--proxy=$proxy_spec] [--proxyForScheme=<scheme>] "
             . "[--verify]"
             . "[-c|--critical=<threshold>] [-w|--warning=<threshold>] "
             . "HOST[:PORT] [HOST[:PORT] [...]]",
@@ -96,36 +97,22 @@ $np->add_arg(
 );
 
 $np->add_arg(
-    spec => 'proxyHost=s',
-    help => qq{--proxyHost=<proxy>\n   Use this proxy to connect to the final endpoint(s).},
+    spec => 'proxy=s',
+    help => qq{--proxy=$proxy_spec\n   Use this proxy to connect to the final endpoint(s).},
 );
 
 $np->add_arg(
-    spec => 'proxyPort=s',
-    help => qq{--proxyPort=<port>\n   Use this proxy port. Default: }. PROXY_PORT,
-);
-
-$np->add_arg(
-    spec => 'proxyScheme=s',
-    help => qq{--proxyScheme\n   Use this scheme to contact proxy. Default: }. PROXY_SCHEME,
-);
-
-$np->add_arg(
-    spec => 'proxyUser=s',
-    help => qq{--proxyUser=<user>\n   If proxy requires authentication, specify proxy username.},
-);
-
-$np->add_arg(
-    spec => 'proxyPassword=s',
-    help => qq{--proxyPassword=<password>\n   If proxy requires authentication, specify proxy password.},
+    spec => 'proxyForScheme=s@',
+    help => qq{--proxyForScheme=<scheme>\n   Specify to which scheme(s) the }
+          . qq{proxy applies. This option can be specified multiple times. }
+          . qq{The default is to use proxy for https, as if 'https_proxy' }
+          . qq{environment variable was set.},
 );
 
 $np->add_arg(
     spec => 'useEnvProxy|P',
     help => qq{-P, --useEnvProxy\n}
-          . qq{   Get proxy configuration from environment variables (you can use --var to pass }
-          . qq{environment variables like http_proxy/https_proxy, and so on, if they're not in your }
-          . qq{environment already)},
+          . qq{   Get proxy configuration from environment variables.},
 );
 
 $np->add_arg(
@@ -196,25 +183,21 @@ debug("Using verification method: ", $verification_method);
 # ------------------------------------------------------------------------------
 
 my $ua;
-if (my $p_host = $opts->proxyHost()) {
+if (my $proxy = $opts->proxy()) {
 
-    debug "Proxy setup";
+    # Avoid printing credentials in debug
+    debug "Proxy setup: ", $proxy =~ s{/.*?:.*?\@}{XXXXXX:XXXXXX\@}r;
 
-	my $ua = LWP::UserAgent->new(
+	$ua = LWP::UserAgent->new(
         agent      => $plugin_name,
         keep_alive => 0,
     );
 
-    # Build proxy url. Starts with proxy scheme
-    my $proxy_url = ( $opts->proxyScheme() || PROXY_SCHEME ) . "://";
+    my $proxy_schemes = $opts->proxyForScheme() || PROXY_SCHEMES;
 
-    if (my $p_user = $opts->proxyUser()) {
-        $proxy_url .= $p_user . ":" . $opts->proxyPassword() . "@";
-    }
+    debug "Using proxy for schemes: @$proxy_schemes";
 
-    $proxy_url .= $p_host . ":" . ( $opts->proxyPort() || PROXY_PORT ) . "/";
-
-	$ua->proxy( ['https'], $proxy_url );
+	$ua->proxy( $proxy_schemes, $proxy );
 }
 
 
@@ -240,7 +223,7 @@ for my $target (@ARGV) {
  
         # authentication failed
         $res->is_success()
-            or $np->plugin_die("CONNECT failed through proxy for target $host:$port");
+            or $np->plugin_die("CONNECT failed through proxy for target $host:$port: [". $res->code. "] ". $res->message());
  
 	    $client = IO::Socket::SSL->start_SSL($res->{client_socket})
 	        or $np->plugin_exit(CRITICAL, "error=$!, ssl_error=$SSL_ERROR, target=$target");
