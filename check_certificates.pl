@@ -36,7 +36,7 @@ use LWP::UserAgent;
 use constant                DEFAULT_PORT    =>       443;
 
 use constant                PROXY_PORT      =>      8080;
-use constant                PROXY_SCHEMES   =>      [ qw( https ) ];
+use constant                PROXY_SCHEMES   =>      [ qw( http https ) ];
 
 use subs qw(
     debug
