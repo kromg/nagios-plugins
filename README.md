@@ -12,7 +12,7 @@ check_certificates.pl: plugin to verify expiration dates of SSL certificates - W
 
         - IO::Socket::SSL::Utils
 
-        - LWP::UserAgen (TODO: make this optional if no proxy is required)
+        - LWP::UserAgent (TODO: make this optional if no proxy is required)
 
         - Monitoring::Plugin
 
