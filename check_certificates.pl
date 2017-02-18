@@ -17,21 +17,23 @@
 #
 #   CHANGELOG:
 #
-#       2017-02-15T17:11:32+01:00
-#           First release.
+#       2017-02-18T22:52:37+01:00
+#           v 0.1.0 released.
+#               TODO: write manual.
 #
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(1.0.0);
+use version; our $VERSION = qv(0.1.0);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
 
 use Monitoring::Plugin;
 use IO::Socket::SSL;
-
+use IO::Socket::SSL::Utils;
 use LWP::UserAgent;
+use POSIX qw(strftime);
 
 use constant                DEFAULT_PORT    =>       443;
 
@@ -80,7 +82,7 @@ my $np = Monitoring::Plugin::CheckCerts->new(
 $np->add_arg(
     spec => 'critical|c=s',
     help => qq{-c, --critical=INTEGER:INTEGER\n}
-          . qq{   Critical threshold for each single step.\n}
+          . qq{   Critical threshold (in days) for certificate expiration.\n}
           . qq{   See https://www.monitoring-plugins.org/doc/guidelines.html#THRESHOLDFORMAT }
           . qq{for the threshold format, or run $plugin_name -M (requires perldoc executable). },
 );
@@ -127,7 +129,7 @@ $np->add_arg(
 $np->add_arg(
     spec => 'warning|w=s',
     help => qq{-w, --warning=INTEGER:INTEGER\n}
-          . qq{   Warning threshold for each single step.\n}
+          . qq{   Warning threshold (in days) for certificate expiration.\n}
           . qq{   See https://www.monitoring-plugins.org/doc/guidelines.html#THRESHOLDFORMAT }
           . qq{for the threshold format, or run $plugin_name -M (requires perldoc executable).},
 );
@@ -170,7 +172,7 @@ unless(@ARGV) {
 }
 
 # Set the verification method to be used when getting the certificate
-my $verification_method = 
+my $verification_method =
     $opts->verify()         ?
         SSL_OCSP_FULL_CHAIN :
         SSL_VERIFY_NONE     ;
@@ -186,7 +188,7 @@ my $ua;
 if (my $proxy = $opts->proxy()) {
 
     # Avoid printing credentials in debug
-    debug "Proxy setup: ", $proxy =~ s{/.*?:.*?\@}{XXXXXX:XXXXXX\@}r;
+    debug "Proxy setup: ", $proxy =~ s{//.*?:.*?\@}{//XXXXXX:XXXXXX\@}r;
 
 	$ua = LWP::UserAgent->new(
         agent      => $plugin_name,
@@ -205,11 +207,13 @@ if (my $proxy = $opts->proxy()) {
 #  Probe all targets
 # ------------------------------------------------------------------------------
 
-for my $target (@ARGV) {
+TARGET: for my $target (@ARGV) {
 
+    # Get the target
     my ($host, $port) = split(':', $target);
     $port //= DEFAULT_PORT;
 
+    # Get the SSL socket.
     my $client;
 
     if ($ua) {
@@ -220,36 +224,75 @@ for my $target (@ARGV) {
         my $req = HTTP::Request->new(
             CONNECT => "http://$host:$port/" );
         my $res = $ua->request($req);
- 
+
         # authentication failed
         $res->is_success()
-            or $np->plugin_die("CONNECT failed through proxy for target $host:$port: [". $res->code. "] ". $res->message());
- 
-	    $client = IO::Socket::SSL->start_SSL($res->{client_socket})
-	        or $np->plugin_exit(CRITICAL, "error=$!, ssl_error=$SSL_ERROR, target=$target");
+            or $np->plugin_die(
+                "CONNECT failed through proxy for target $host:$port: ["
+                . $res->code. "] ". $res->message());
+
+	    unless ($client = IO::Socket::SSL->start_SSL($res->{client_socket}) ) {
+            $np->add_critical("target=$target, error=$!, ssl_error=$SSL_ERROR");
+            next TARGET;
+        }
 
     } else {
 
-        $client = IO::Socket::SSL->new(
-            PeerAddr        => $host,
-            PeerPort        => $port,
-            SSL_verify_mode => $verification_method,
-        ) or $np->plugin_exit(CRITICAL, "error=$!, ssl_error=$SSL_ERROR, target=$target");
-
+        unless (
+            $client = IO::Socket::SSL->new(
+                PeerAddr        => $host,
+                PeerPort        => $port,
+                SSL_verify_mode => $verification_method,
+            )
+        ) {
+            $np->add_critical("target=$target, error=$!, ssl_error=$SSL_ERROR");
+            next TARGET;
+        }
     }
 
-    my $ocsp = $client->ocsp_resolver();
-    my $errors = $ocsp->resolve_blocking();
-    if ($errors) {
-        warn "OCSP verification failed: $errors";
-        close($client);
+    # Connection has been established, now check the certificate:
+    my $cert = CERT_asHash( $client->peer_certificate() );
+
+    # debug( Data::Dumper->Dump([$cert], [$target]) );
+
+    my $days_to_expiration = int( ( $cert->{ not_after } - time() ) / 86400 );
+
+    my $status = $np->check_threshold(
+        check => $days_to_expiration,
+        warning => $opts->warning(),
+        critical => $opts->critical()
+    );
+
+    my $expiry_date = strftime("%a %d %b %Y %H:%M:%S %Z", localtime( $cert->{ not_after } ) );
+
+    if ($status == OK) {
+        $np->add_ok( "target=$target, expires=$expiry_date ($days_to_expiration days)" );
+    } elsif ($status == WARNING) {
+        $np->add_warning( "target=$target, expires=$expiry_date ($days_to_expiration days)" );
+    } elsif ($status == CRITICAL) {
+        $np->add_critical( "target=$target, expires=$expiry_date ($days_to_expiration days)" );
     }
 
+    close($client);
 
 }
 
+# Build final message
+my $msg;
+my @crits = $np->criticals();
+$msg .= "CRITICAL: ". join("; ", @crits). "; "
+    if @crits;
 
+my @warns = $np->warnings();
+$msg .= "WARNING: ". join("; ", @warns). "; "
+    if @warns;
 
+my @oks = $np->oks();
+$msg .= "OK: ". join("; ", @oks). "; "
+    if @oks;
+
+# Finally, exit
+$np->plugin_exit( $np->status(), $msg );
 
 
 
@@ -278,14 +321,18 @@ sub new {
     return $self;
 }
 
+sub raise_status {
+    my ($self, $newStatus) = @_;
+    $self->{_checkcerts_status} = $newStatus
+        if $self->{_checkcerts_status} < $newStatus;
+}
 
 sub add_warning {
     my $self = shift;
 
     push @{ $self->{_checkcerts_warnings} }, @_;
 
-    $self->{_checkcerts_status} = WARNING
-        unless $self->{_checkcerts_status} && $self->{_checkcerts_status} > WARNING;
+    $self->raise_status( WARNING );
 }
 
 sub add_critical {
@@ -293,8 +340,7 @@ sub add_critical {
 
     push @{ $self->{_checkcerts_criticals} }, @_;
 
-    $self->{_checkcerts_status} = CRITICAL
-        unless $self->{_checkcerts_status} && $self->{_checkcerts_status} > CRITICAL;
+    $self->raise_status( CRITICAL );
 }
 
 sub add_ok {
@@ -317,12 +363,6 @@ sub add_status {
 
 sub status {
     return $_[0]->{_checkcerts_status};
-}
-
-sub raise_status {
-    my ($self, $newStatus) = @_;
-    $self->{_checkcerts_status} = $newStatus
-        if $self->{_checkcerts_status} < $newStatus;
 }
 
 sub oks {
