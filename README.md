@@ -2,7 +2,7 @@
 
 Collection of plugins for Nagios.
 
-check_certificates.pl: plugin to verify expiration dates of SSL certificates.
+check_certificates.pl: plugin to verify expiration dates of SSL certificates - WITH PROXY SUPPORT.
 
     Requires:
 
@@ -12,7 +12,7 @@ check_certificates.pl: plugin to verify expiration dates of SSL certificates.
 
         - IO::Socket::SSL::Utils
 
-        - LWP::UserAgent
+        - LWP::UserAgen (TODO: make this optional if no proxy is required)
 
         - Monitoring::Plugin
 
