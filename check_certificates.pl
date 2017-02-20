@@ -21,16 +21,20 @@
 #           v 0.1.0 released.
 #               TODO: write manual.
 #
+#       2017-02-20T14:00:32+01:00
+#           v 0.2.0     - Added support for STARTTLS (-T)
+#
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(0.1.0);
+use version; our $VERSION = qv(0.2.0);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
 
 use Monitoring::Plugin;
 use IO::Socket::SSL;
+use IO::Socket::INET6;
 use IO::Socket::SSL::Utils;
 use LWP::UserAgent;
 use POSIX qw(strftime);
@@ -70,7 +74,7 @@ my $np = Monitoring::Plugin::CheckCerts->new(
     usage => "Usage: %s [-v|--verbose] [-t <timeout>] [-d|--debug] "
             . "[-h|--help] [-M|--manual] "
             . "[-P|--useEnvProxy] [--proxy=$proxy_spec] [--proxyForScheme=<scheme>] "
-            . "[--verify]"
+            . "[--verify] [-T|--tls] "
             . "[-c|--critical=<threshold>] [-w|--warning=<threshold>] "
             . "HOST[:PORT] [HOST[:PORT] [...]]",
     version => $VERSION,
@@ -115,6 +119,12 @@ $np->add_arg(
     spec => 'useEnvProxy|P',
     help => qq{-P, --useEnvProxy\n}
           . qq{   Get proxy configuration from environment variables.},
+);
+
+$np->add_arg(
+    spec => 'tls|T',
+    help => qq{-T, --tls\n}
+          . qq{   Use STARTTLS to test the targets.},
 );
 
 $np->add_arg(
@@ -231,22 +241,66 @@ TARGET: for my $target (@ARGV) {
                 "CONNECT failed through proxy for target $host:$port: ["
                 . $res->code. "] ". $res->message());
 
-	    unless ($client = IO::Socket::SSL->start_SSL($res->{client_socket}) ) {
+        # Get the socket to talk through
+        my $socket = $res->{client_socket};
+
+        if ($opts->tls()) {
+            $socket->recv(my $buf, 8192);
+            debug( $buf );
+            $socket->send("STARTTLS\n");
+            $socket->recv($buf, 8192);
+            debug( $buf );
+        }
+
+	    unless (
+            $client = IO::Socket::SSL->start_SSL(
+                $socket,
+                SSL_verify_mode => $verification_method,
+            )
+        ) {
             $np->add_critical("target=$target, error=$!, ssl_error=$SSL_ERROR");
             next TARGET;
         }
 
     } else {
 
-        unless (
-            $client = IO::Socket::SSL->new(
-                PeerAddr        => $host,
-                PeerPort        => $port,
-                SSL_verify_mode => $verification_method,
-            )
-        ) {
-            $np->add_critical("target=$target, error=$!, ssl_error=$SSL_ERROR");
-            next TARGET;
+        if ($opts->tls()) {
+            unless (
+                $client = IO::Socket::INET6->new(
+                    PeerAddr        => $host,
+                    PeerPort        => $port,
+                )
+            ) {
+                $np->add_critical("target=$target, connect_error=$!");
+                next TARGET;
+            }
+
+            $client->recv(my $buf, 8192);
+            debug($buf);
+            debug("Sending: STARTTLS");
+            $client->send("STARTTLS\n");
+            $client->recv($buf, 8192);
+            debug($buf);
+            unless ($client = IO::Socket::SSL->start_SSL(
+                    $client,
+                    SSL_verify_mode => $verification_method,
+                )
+            ) {
+                $np->add_critical("target=$target, error=$!, ssl_error=$SSL_ERROR");
+                next TARGET;
+            }
+
+        } else {
+            unless (
+                $client = IO::Socket::SSL->new(
+                    PeerAddr        => $host,
+                    PeerPort        => $port,
+                    SSL_verify_mode => $verification_method,
+                )
+            ) {
+                $np->add_critical("target=$target, error=$!, ssl_error=$SSL_ERROR");
+                next TARGET;
+            }
         }
     }
 
