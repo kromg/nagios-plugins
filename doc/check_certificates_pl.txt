@@ -1,0 +1,26 @@
+check_certificates.txt is a plugin to check validity and/or expiration date of
+SSL certificates.
+
+check_certificates.txt supports STARTTLS and going through a proxy. 
+
+License: Perl 5 license.
+
+check_certificates.pl comes with a MANUAL PAGE.
+TO SEE FULL DOCUMENTATION:
+  - run
+        perldoc check_certificates.pl
+  - or run
+        check_certificates.pl -M
+    (the latter may not work if you don't have all the prerequisites installed).
+
+Prerequisite packages: 
+
+- IO::Socket::INET6
+- IO::Scoekt::SSL
+- IO::Scoekt::SSL::Utils
+- LWP::UserAgent
+- Monitoring::Plugin
+
+only for debug: 
+- Data::Dumper
+
