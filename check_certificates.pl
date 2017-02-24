@@ -24,6 +24,12 @@
 #       2017-02-20T14:00:32+01:00
 #           v 0.2.0     - Added support for STARTTLS (-T)
 #
+#       2017-02-24T09:23:21+01:00
+#           v 0.3.0     - Option -P|--useEnvProxy is honored now.
+#
+#       2017-02-24T10:24:46+01:00
+#           v 0.4.0     - Refactoring of the code.
+#
 
 use strict;
 use warnings;
@@ -31,18 +37,10 @@ use version; our $VERSION = qv(0.2.0);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
-
-use Monitoring::Plugin;
-use IO::Socket::SSL;
-use IO::Socket::INET6;
-use IO::Socket::SSL::Utils;
-use LWP::UserAgent;
 use POSIX qw(strftime);
+use Monitoring::Plugin;
 
 use constant                DEFAULT_PORT    =>       443;
-
-use constant                PROXY_PORT      =>      8080;
-use constant                PROXY_SCHEMES   =>      [ qw( http https ) ];
 
 use subs qw(
     debug
@@ -52,13 +50,10 @@ use subs qw(
 
 
 
-
-
-
 # ------------------------------------------------------------------------------
 #  Globals
 # ------------------------------------------------------------------------------
-our $plugin_name = basename( $0 );
+my $plugin_name = basename( $0 );
 my $proxy_spec   = '[<scheme>://][<user>:<password>@]<proxy>[:<port>]';
 
 
@@ -181,36 +176,12 @@ unless(@ARGV) {
     $np->plugin_die("No targets specified on command line");
 }
 
-# Set the verification method to be used when getting the certificate
-my $verification_method =
-    $opts->verify()         ?
-        SSL_OCSP_FULL_CHAIN :
-        SSL_VERIFY_NONE     ;
-debug("Using verification method: ", $verification_method);
 
-
-
-# ------------------------------------------------------------------------------
-#  If a proxy is configured, prepare user agent for the probe
-# ------------------------------------------------------------------------------
-
-my $ua;
-if (my $proxy = $opts->proxy()) {
-
-    # Avoid printing credentials in debug
-    debug "Proxy setup: ", $proxy =~ s{//.*?:.*?\@}{//XXXXXX:XXXXXX\@}r;
-
-	$ua = LWP::UserAgent->new(
-        agent      => $plugin_name,
-        keep_alive => 0,
-    );
-
-    my $proxy_schemes = $opts->proxyForScheme() || PROXY_SCHEMES;
-
-    debug "Using proxy for schemes: @$proxy_schemes";
-
-	$ua->proxy( $proxy_schemes, $proxy );
-}
+# Create our object to make checks
+my $cc = Local::EntirelyUnlike::CheckCerts->new(
+    plugin => $np,
+    opts   => $opts
+);
 
 
 # ------------------------------------------------------------------------------
@@ -223,97 +194,15 @@ TARGET: for my $target (@ARGV) {
     my ($host, $port) = split(':', $target);
     $port //= DEFAULT_PORT;
 
-    # Get the SSL socket.
-    my $client;
-
-    if ($ua) {
-
-        debug "Using proxy";
-
-        # connect to the proxy
-        my $req = HTTP::Request->new(
-            CONNECT => "http://$host:$port/" );
-        my $res = $ua->request($req);
-
-        # authentication failed
-        $res->is_success()
-            or $np->plugin_die(
-                "CONNECT failed through proxy for target $host:$port: ["
-                . $res->code. "] ". $res->message());
-
-        # Get the socket to talk through
-        my $socket = $res->{client_socket};
-
-        if ($opts->tls()) {
-            $socket->recv(my $buf, 8192);
-            debug( $buf );
-            $socket->send("STARTTLS\n");
-            $socket->recv($buf, 8192);
-            debug( $buf );
-        }
-
-	    unless (
-            $client = IO::Socket::SSL->start_SSL(
-                $socket,
-                SSL_verify_mode => $verification_method,
-            )
-        ) {
-            $np->add_critical("target=$target, error=$!, ssl_error=$SSL_ERROR");
-            next TARGET;
-        }
-
-    } else {
-
-        if ($opts->tls()) {
-            unless (
-                $client = IO::Socket::INET6->new(
-                    PeerAddr        => $host,
-                    PeerPort        => $port,
-                )
-            ) {
-                $np->add_critical("target=$target, connect_error=$!");
-                next TARGET;
-            }
-
-            $client->recv(my $buf, 8192);
-            debug($buf);
-            debug("Sending: STARTTLS");
-            $client->send("STARTTLS\n");
-            $client->recv($buf, 8192);
-            debug($buf);
-            unless ($client = IO::Socket::SSL->start_SSL(
-                    $client,
-                    SSL_verify_mode => $verification_method,
-                )
-            ) {
-                $np->add_critical("target=$target, error=$!, ssl_error=$SSL_ERROR");
-                next TARGET;
-            }
-
-        } else {
-            unless (
-                $client = IO::Socket::SSL->new(
-                    PeerAddr        => $host,
-                    PeerPort        => $port,
-                    SSL_verify_mode => $verification_method,
-                )
-            ) {
-                $np->add_critical("target=$target, error=$!, ssl_error=$SSL_ERROR");
-                next TARGET;
-            }
-        }
-    }
-
-    # Connection has been established, now check the certificate:
-    my $cert = CERT_asHash( $client->peer_certificate() );
-
-    # debug( Data::Dumper->Dump([$cert], [$target]) );
+    # Get the Certificate
+    my $cert = $cc->get_peer_certificate($host, $port)
+        or next TARGET;
 
     my $days_to_expiration = int( ( $cert->{ not_after } - time() ) / 86400 );
 
     my $status = $np->check_threshold(
-        check => $days_to_expiration,
-        warning => $opts->warning(),
+        check    => $days_to_expiration,
+        warning  => $opts->warning(),
         critical => $opts->critical()
     );
 
@@ -327,28 +216,19 @@ TARGET: for my $target (@ARGV) {
         $np->add_critical( "target=$target, expires=$expiry_date ($days_to_expiration days)" );
     }
 
-    close($client);
-
 }
 
-# Build final message
-my $msg;
-my @crits = $np->criticals();
-$msg .= "CRITICAL: ". join("; ", @crits). "; "
-    if @crits;
-
-my @warns = $np->warnings();
-$msg .= "WARNING: ". join("; ", @warns). "; "
-    if @warns;
-
-my @oks = $np->oks();
-$msg .= "OK: ". join("; ", @oks). "; "
-    if @oks;
-
 # Finally, exit
-$np->plugin_exit( $np->status(), $msg );
+$np->plugin_exit( $np->status(), $np->build_message() );
 
 
+
+
+# ------------------------------------------------------------------------------
+#  End of main
+# ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 
 
 
@@ -436,5 +316,303 @@ sub criticals {
         @{ $_[0]->{_checkcerts_criticals} } :
            $_[0]->{_checkcerts_criticals}   ;
 }
+
+sub get_criticals {
+    my ($self) = @_;
+    
+    my @crits = $self->criticals();
+    return "CRITICAL: ". join("; ", @crits). "; "
+        if @crits;
+}
+
+sub get_warnings {
+    my ($self) = @_;
+
+    my @warns = $self->warnings();
+    return "WARNING: ". join("; ", @warns). "; "
+        if @warns;
+}
+
+sub get_oks {
+    my ($self) = @_;
+
+    my @oks = $self->oks();
+    return "OK: ". join("; ", @oks). "; "
+        if @oks;
+}
+
+sub build_message {
+    my ($self) = @_;
+
+    my $msg;
+    if (my $crit = $self->get_criticals()) {
+        $msg .= $crit;
+    }
+        
+    if (my $warn = $self->get_warnings()) {
+        $msg .= $warn;
+    }
+
+    if (my $oks = $self->get_oks()) {
+        $msg .= $oks;
+    }
+
+    return $msg;
+}
+
+###############################################################################
+## LWP::UserAgent extension
+###############################################################################
+package LWP::UserAgent::CheckCerts;
+use strict;
+use warnings;
+use v5.010.001;
+use utf8;
+use LWP::UserAgent;
+use parent qw(LWP::UserAgent);
+
+use constant                PROXY_PORT      =>      8080;
+use constant                PROXY_SCHEMES   =>      [ qw( http https ) ];
+
+sub new {
+    my ($class, %args) = @_;
+
+    my $proxy   = delete $args{ proxy };
+    my $schemes = delete $args{ schemes };
+    my $use_env = delete $args{ use_env };
+
+    my $self = $class->SUPER::new(
+        agent      => $plugin_name,
+        keep_alive => 0,
+        %args,
+    );
+
+    if ($use_env) {
+        main::debug "Proxy setup: using environment variables for proxy.";
+        $self->env_proxy();
+    } else {
+        main::debug "Proxy setup: ", $proxy =~ s{//.*?:.*?\@}{//XXXXXX:XXXXXX\@}r;
+        $self->proxy( ($schemes // PROXY_SCHEMES()), $proxy );
+    }
+}
+
+
+sub proxy_connect {
+    my ($self, $host, $port) = @_;
+
+    # connect to the proxy
+    my $req = HTTP::Request->new(
+        CONNECT => "http://$host:$port/" );
+    rerurn $self->request($req);
+}
+
+
+
+###############################################################################
+## Check Certificates
+###############################################################################
+package Local::EntirelyUnlike::CheckCerts;
+use strict;
+use warnings;
+use v5.010.001;
+use utf8;
+use IO::Socket::SSL;
+use IO::Socket::INET6;
+use IO::Socket::SSL::Utils;
+
+use constant                BUFFER_SIZE     =>      8192;
+
+BEGIN {
+    my @attrs = qw(
+        np
+        opts
+        ua
+        verification_method
+    );
+    
+    # -----------------------
+    # Generate getters
+    # -----------------------
+    for my $attr (@attrs) {
+        my $method_name = $attr;
+        my $getter = sub {
+            return $_[0]->{ $attr };
+        };
+    
+        no strict "refs";
+        *$method_name = $getter;
+    }
+    
+    my @proxy_methods = qw(
+        status
+        add_ok
+        add_warning
+        add_critical
+        plugin_die
+        plugin_exit
+    );
+
+    # -----------------------
+    # Generate proxy methods
+    # -----------------------
+    for my $pm (@proxy_methods) {
+        my $method = sub {
+            my $self = shift;
+            return $self->np()->$pm(@_);
+        };
+    
+        no strict "refs";
+        *$pm = $method;
+    }
+}
+
+# ------------------------------------------------------------------------------
+#  Static methods
+# ------------------------------------------------------------------------------
+
+sub _starttls {
+    my ($socket) = @_;
+    $socket->recv(my $buf, BUFFER_SIZE());
+    debug( $buf );
+    $socket->send("STARTTLS\n");
+    $socket->recv($buf, BUFFER_SIZE());
+    debug( $buf );
+}
+
+# ------------------------------------------------------------------------------
+#  Methods
+# ------------------------------------------------------------------------------
+
+sub new {
+    my ($class, %args)  = @_;
+    my $self            = { %args };
+
+    my $opts = $args{ opts };
+
+    # --------------------------------------------------------------------------
+    # Set the verification method to be used when getting the certificate
+    # --------------------------------------------------------------------------
+    $self->{verification_method} =
+        $opts->verify()         ?
+            SSL_OCSP_FULL_CHAIN :
+            SSL_VERIFY_NONE     ;
+
+    main::debug("Using verification method: ", $self->{ verification_method });
+
+    # --------------------------------------------------------------------------
+    #  If a proxy is configured, prepare user agent for the probe
+    # --------------------------------------------------------------------------
+    if ($opts->proxy() || $opts->useEnvProxy()) {
+        $self->{ ua } = LWP::UserAgent::CheckCerts->new(
+            proxy   => $opts->proxy(),
+            schemes => $opts->proxyForScheme(),
+            use_env => $opts->useEnvProxy(),
+        );
+    }
+
+    return bless($self, $class);
+}
+
+
+sub get_peer_certificate {
+    my ($self, $host, $port) = @_;
+
+    my $client;
+    if ($self->ua()) {
+        $client = $self->get_peer_certificate_via_proxy($host, $port);
+
+    } else {
+        $client = $self->get_peer_certificate_without_proxy($host, $port);
+    }
+
+    if ($client) {
+        my $cert = CERT_asHash( $client->peer_certificate() );
+        $client->close();
+        return $cert;
+    } else {
+        return undef;
+    }
+}
+
+sub get_peer_certificate_via_proxy {
+    my ($self, $host, $port) = @_;
+    main::debug "Using proxy";
+
+    my $ua   = $self->ua();
+    my $opts = $self->opts();
+
+    # connect to the proxy
+    my $res = $ua->proxy_connect($host, $port);
+
+    # CONNECT failed
+    $res->is_success()
+        or $self->plugin_die(
+            "CONNECT failed through proxy for target $host:$port: ["
+            . $res->code. "] ". $res->message());
+
+    # Get the socket to talk through
+    my $socket = $res->{client_socket};
+
+    _starttls($socket) if $opts->tls();
+
+    my $client;
+	unless (
+        $client = IO::Socket::SSL->start_SSL(
+            $socket,
+            SSL_verify_mode => $self->verification_method(),
+        )
+    ) {
+        $self->add_critical("target=$host:$port, error=$!, ssl_error=$SSL_ERROR");
+    }
+    
+    return $client;
+}
+
+
+sub get_peer_certificate_without_proxy {
+    my ($self, $host, $port) = @_;
+
+    my $opts = $self->opts();
+
+    my $client;
+    if ($opts->tls()) {
+        unless (
+            my $client = IO::Socket::INET6->new(
+                PeerAddr        => $host,
+                PeerPort        => $port,
+            )
+        ) {
+            $self->add_critical("target=$host:$port, connect_error=$!");
+            return undef;
+        }
+
+        _starttls($client);
+
+        unless ($client = IO::Socket::SSL->start_SSL(
+                $client,
+                SSL_verify_mode => $self->verification_method(),
+            )
+        ) {
+            $np->add_critical("target=$host:$port, error=$!, ssl_error=$SSL_ERROR");
+        }
+
+    } else {
+        unless (
+            $client = IO::Socket::SSL->new(
+                PeerAddr        => $host,
+                PeerPort        => $port,
+                SSL_verify_mode => $self->verification_method(),
+            )
+        ) {
+            $np->add_critical("target=$host:$port, error=$!, ssl_error=$SSL_ERROR");
+            return undef;
+        }
+    }
+
+    return $client;
+}
+
+
+
 
 
