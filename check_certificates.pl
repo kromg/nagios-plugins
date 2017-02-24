@@ -30,10 +30,13 @@
 #       2017-02-24T10:24:46+01:00
 #           v 0.4.0     - Refactoring of the code.
 #
+#       2017-02-24T11:15:59+01:00
+#           v 0.5.0     - Option -T renamed -S (--tls -> --starttls)
+#
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(0.2.0);
+use version; our $VERSION = qv(0.5.0);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
@@ -69,7 +72,7 @@ my $np = Monitoring::Plugin::CheckCerts->new(
     usage => "Usage: %s [-v|--verbose] [-t <timeout>] [-d|--debug] "
             . "[-h|--help] [-M|--manual] "
             . "[-P|--useEnvProxy] [--proxy=$proxy_spec] [--proxyForScheme=<scheme>] "
-            . "[--verify] [-T|--tls] "
+            . "[--verify] [-S|--starttls] "
             . "[-c|--critical=<threshold>] [-w|--warning=<threshold>] "
             . "HOST[:PORT] [HOST[:PORT] [...]]",
     version => $VERSION,
@@ -117,8 +120,8 @@ $np->add_arg(
 );
 
 $np->add_arg(
-    spec => 'tls|T',
-    help => qq{-T, --tls\n}
+    spec => 'starttls|S',
+    help => qq{-S, --starttls\n}
           . qq{   Use STARTTLS to test the targets.},
 );
 
@@ -493,9 +496,9 @@ sub new {
     # Set the verification method to be used when getting the certificate
     # --------------------------------------------------------------------------
     $self->{verification_method} =
-        $opts->verify()         ?
-            SSL_OCSP_FULL_CHAIN :
-            SSL_VERIFY_NONE     ;
+        $opts->verify()     ?
+            SSL_VERIFY_PEER :
+            SSL_VERIFY_NONE ;
 
     main::debug("Using verification method: ", $self->{ verification_method });
 
@@ -553,7 +556,7 @@ sub get_peer_certificate_via_proxy {
     # Get the socket to talk through
     my $socket = $res->{client_socket};
 
-    _starttls($socket) if $opts->tls();
+    _starttls($socket) if $opts->starttls();
 
     my $client;
 	unless (
@@ -575,7 +578,7 @@ sub get_peer_certificate_without_proxy {
     my $opts = $self->opts();
 
     my $client;
-    if ($opts->tls()) {
+    if ($opts->starttls()) {
         unless (
             my $client = IO::Socket::INET6->new(
                 PeerAddr        => $host,
@@ -614,5 +617,164 @@ sub get_peer_certificate_without_proxy {
 
 
 
+###############################################################################
+## MANUAL
+###############################################################################
+
+=pod
+
+=head1 NAME
+
+check_certificates.pl - Verify SSL certificate of one or more targets.
 
 
+=head1 VERSION
+
+This is the documentation for check_end2end.pl v0.5.0
+
+
+=head1 SYNOPSYS
+
+    # Check one or more target specifying how many days before certificate
+    # expiration a warning or a critical must be issued; with --verify the 
+    # certificates common name and chain are also checked for validity:
+
+    check_certificates.pl [--verify] -c <crit_days> -w <warn_days> \
+        HOST[:PORT] [HOST[:PORT] ... ]
+
+
+    # If you have to check a service behind a proxy, you can use environment
+    # variables or specify a proxy:
+
+    check_certificates.pl --proxy http://[user:password@]proxy[:port]/ \
+        HOST[:PORT] [HOST[:PORT] ... ]
+
+    export http_proxy=http://[user:password@]proxy[:port]/
+    check_certificates.pl --useEnvProxy HOST[:PORT] [HOST[:PORT] ... ]
+
+
+=head1 DESCRITPION
+
+C<check_certificates.pl> is a simple plugin to verify when SSL certificates
+will expire. Optionally, the validity of the certificates can be verified. 
+C<check_certificates.pl> supports checking through a proxy and using STARTTLS.
+
+
+=head1 THRESHOLDS
+
+See L<https://www.monitoring-plugins.org/doc/guidelines.html#THRESHOLDFORMAT>
+for threshold formats. In the simplest case: 
+
+    check_certificates.pl -c crit_days -w warn_days <targets>
+
+will issue a warning if any one of the target certificates will expire less
+than <warn_days> from now, or a critical if any one of the target certificates
+will expire less than <crit_days> from now. 
+
+
+=head1 OPTIONS
+
+=head2 B<--proxyForScheme>
+
+Use the specified proxy for the named scheme (e.g. 'http', 'https'). 
+The default scheme is 'http' (and it should be enough). This is equivalent to
+setting environment variables C<http_proxy>, C<https_proxy> and so on. This 
+option can be specified multiple times, e.g.: 
+
+    ... --proxyForScheme http --proxyForScheme https ...
+
+
+=head2 B<-P|--useEnfProxy>
+
+Get proxy configuration from environmen variables:
+
+    http_proxy
+    https_proxy
+
+
+=head2 B<--verify>
+
+Perform a verification of the certificate using L<IO::Socket::SSL>'s 
+SSL_VERIFY_PEER verify mode.
+
+
+=head2 B<--proxy [scheme]://[user:password@]proxy[:port]/>
+
+Perform checks by CONNECTing targets through this proxy (with optional
+authentication).
+
+
+=head2 <-S|--starttls>
+
+Perform a STARTTLS onto the socket before doing SSL handshake.
+
+
+=head1 PREREQUISITES
+
+Reuired modules:
+
+=over 4
+
+=item * parent (pragma)
+
+=item * IO::Socket::INET6
+
+=item * IO::Socket::SSL
+
+=item * IO::Socket::SSL::Utils
+
+=item * LWP::UserAgent
+
+=item * Monitoring::Plugin
+
+=back
+
+for debugging:
+
+=over 4
+
+=item * Data::Dumper
+
+=back
+
+
+
+
+=head1 AUTHOR
+
+Giacomo Montagner, <kromg at entirelyunlike.net>,
+<kromg.kromg at gmail.com> >
+
+=head1 BUGS AND CONTRIBUTIONS
+
+Please report any bug at L<https://github.com/kromg/nagios-plugins/issues>. If
+you have any patch/contribution, feel free to fork git repository and submit a
+pull request with your modifications.
+
+
+=head2 Contributors:
+
+* Matteo Guadrini
+
+
+
+=head1 LICENSE AND COPYRIGHT
+
+Copyright (C) 2017 Giacomo Montagner <giacomo@entirelyunlike.net>
+
+This program is free software: you can redistribute it and/or modify
+it under the same terms as Perl itself, either Perl version 5.8.4 or,
+at your option, any later version of Perl 5 you may have available.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+See http://dev.perl.org/licenses/ for more information.
+
+
+=head1 AVAILABILITY
+
+Latest sources are available from L<https://github.com/kromg/nagios-plugins>
+
+=cut
