@@ -3,7 +3,7 @@
 
 # check_end2end.pl - Simple configurable end-to-end probe plugin for Nagios
 #
-#     Copyright (C) 2016 Giacomo Montagner <giacomo@entirelyunlike.net>
+#     Copyright (C) 20162017 Giacomo Montagner <giacomo@entirelyunlike.net>
 #
 #     This program is free software: you can redistribute it and/or modify
 #     it under the same terms as Perl itself, either Perl version 5.8.4 or,
@@ -61,11 +61,15 @@
 #           - Added grep_err_str/grep_err_re/on_err_grep_match parameters to the
 #             configuration, to allow for a negative (error) string match.
 #
+#       2017-02-24T11:27:28+01:00 v1.6.1
+#           - Copyright update 2017
+#           - Version updates throughout documentation.
+#
 #
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(1.5.0);
+use version; our $VERSION = qv(1.6.1);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
@@ -976,7 +980,7 @@ check_end2end.pl - Simple configurable end-to-end probe plugin for Nagios
 
 =head1 VERSION
 
-This is the documentation for check_end2end.pl v1.5.0
+This is the documentation for check_end2end.pl v1.6.1
 
 
 =head1 SYNOPSYS
@@ -1351,7 +1355,7 @@ pull request with your modifications.
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright (C) 2016 Giacomo Montagner <giacomo@entirelyunlike.net>
+Copyright (C) 2016-2017 Giacomo Montagner <giacomo@entirelyunlike.net>
 
 This program is free software: you can redistribute it and/or modify
 it under the same terms as Perl itself, either Perl version 5.8.4 or,
