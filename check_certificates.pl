@@ -33,10 +33,13 @@
 #       2017-02-24T11:15:59+01:00
 #           v 0.5.0     - Option -T renamed -S (--tls -> --starttls)
 #
+#       2017-02-27T18:15:03+01:00
+#           v 0.5.1     - Fixes in proxy usage.
+#
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(0.5.0);
+use version; our $VERSION = qv(0.5.1);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
@@ -182,8 +185,8 @@ unless(@ARGV) {
 
 # Create our object to make checks
 my $cc = Local::EntirelyUnlike::CheckCerts->new(
-    plugin => $np,
-    opts   => $opts
+    np   => $np,
+    opts => $opts
 );
 
 
@@ -397,6 +400,8 @@ sub new {
         main::debug "Proxy setup: ", $proxy =~ s{//.*?:.*?\@}{//XXXXXX:XXXXXX\@}r;
         $self->proxy( ($schemes // PROXY_SCHEMES()), $proxy );
     }
+
+    return $self;
 }
 
 
@@ -406,7 +411,7 @@ sub proxy_connect {
     # connect to the proxy
     my $req = HTTP::Request->new(
         CONNECT => "http://$host:$port/" );
-    rerurn $self->request($req);
+    return $self->request($req);
 }
 
 
@@ -513,6 +518,7 @@ sub new {
         );
     }
 
+    main::debug(Data::Dumper->Dump([$self]));
     return bless($self, $class);
 }
 
@@ -630,7 +636,7 @@ check_certificates.pl - Verify SSL certificate of one or more targets.
 
 =head1 VERSION
 
-This is the documentation for check_end2end.pl v0.5.0
+This is the documentation for check_end2end.pl v0.5.1
 
 
 =head1 SYNOPSYS
