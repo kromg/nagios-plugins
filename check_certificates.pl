@@ -36,10 +36,15 @@
 #       2017-02-27T18:15:03+01:00
 #           v 0.5.1     - Fixes in proxy usage.
 #
+#       2017-02-28T17:41:02+01:00
+#           v 0.5.2     - Fix to a debug message
+#                       - Explicitly noted in the help that ranges in the form
+#                           crit: / warn: must be used. 
+#
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(0.5.1);
+use version; our $VERSION = qv(0.5.2);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
@@ -76,7 +81,7 @@ my $np = Monitoring::Plugin::CheckCerts->new(
             . "[-h|--help] [-M|--manual] "
             . "[-P|--useEnvProxy] [--proxy=$proxy_spec] [--proxyForScheme=<scheme>] "
             . "[--verify] [-S|--starttls] "
-            . "[-c|--critical=<threshold>] [-w|--warning=<threshold>] "
+            . "[-c|--critical=INTEGER:INTEGER] [-w|--warning=INTEGER:INTEGER] "
             . "HOST[:PORT] [HOST[:PORT] [...]]",
     version => $VERSION,
     blurb   => "This plugin uses IO::Socket::SSL to check the validity of an SSL"
@@ -88,6 +93,7 @@ $np->add_arg(
     spec => 'critical|c=s',
     help => qq{-c, --critical=INTEGER:INTEGER\n}
           . qq{   Critical threshold (in days) for certificate expiration.\n}
+          . qq{   Don't forget the colon (see manual).\n}
           . qq{   See https://www.monitoring-plugins.org/doc/guidelines.html#THRESHOLDFORMAT }
           . qq{for the threshold format, or run $plugin_name -M (requires perldoc executable). },
 );
@@ -141,6 +147,7 @@ $np->add_arg(
     spec => 'warning|w=s',
     help => qq{-w, --warning=INTEGER:INTEGER\n}
           . qq{   Warning threshold (in days) for certificate expiration.\n}
+          . qq{   Don't forget the colon (see manual).\n}
           . qq{   See https://www.monitoring-plugins.org/doc/guidelines.html#THRESHOLDFORMAT }
           . qq{for the threshold format, or run $plugin_name -M (requires perldoc executable).},
 );
@@ -205,6 +212,7 @@ TARGET: for my $target (@ARGV) {
         or next TARGET;
 
     my $days_to_expiration = int( ( $cert->{ not_after } - time() ) / 86400 );
+    debug("target=$target, days_to_expiration=$days_to_expiration, warning=", $opts->warning(), ", critical=", $opts->critical());
 
     my $status = $np->check_threshold(
         check    => $days_to_expiration,
@@ -518,7 +526,7 @@ sub new {
         );
     }
 
-    main::debug(Data::Dumper->Dump([$self]));
+    main::ddump([$self]);
     return bless($self, $class);
 }
 
@@ -602,7 +610,7 @@ sub get_peer_certificate_without_proxy {
                 SSL_verify_mode => $self->verification_method(),
             )
         ) {
-            $np->add_critical("target=$host:$port, error=$!, ssl_error=$SSL_ERROR");
+            $self->add_critical("target=$host:$port, error=$!, ssl_error=$SSL_ERROR");
         }
 
     } else {
@@ -613,7 +621,7 @@ sub get_peer_certificate_without_proxy {
                 SSL_verify_mode => $self->verification_method(),
             )
         ) {
-            $np->add_critical("target=$host:$port, error=$!, ssl_error=$SSL_ERROR");
+            $self->add_critical("target=$host:$port, error=$!, ssl_error=$SSL_ERROR");
             return undef;
         }
     }
@@ -636,7 +644,7 @@ check_certificates.pl - Verify SSL certificate of one or more targets.
 
 =head1 VERSION
 
-This is the documentation for check_end2end.pl v0.5.1
+This is the documentation for check_end2end.pl v0.5.2
 
 
 =head1 SYNOPSYS
@@ -645,7 +653,7 @@ This is the documentation for check_end2end.pl v0.5.1
     # expiration a warning or a critical must be issued; with --verify the 
     # certificates common name and chain are also checked for validity:
 
-    check_certificates.pl [--verify] -c <crit_days> -w <warn_days> \
+    check_certificates.pl [--verify] -c INTEGER:INTEGER -w INTEGER:INTEGER \
         HOST[:PORT] [HOST[:PORT] ... ]
 
 
@@ -666,16 +674,21 @@ will expire. Optionally, the validity of the certificates can be verified.
 C<check_certificates.pl> supports checking through a proxy and using STARTTLS.
 
 
-=head1 THRESHOLDS
+=head1 THRESHOLDS (don't forget the colon, see below)
 
 See L<https://www.monitoring-plugins.org/doc/guidelines.html#THRESHOLDFORMAT>
 for threshold formats. In the simplest case: 
 
-    check_certificates.pl -c crit_days -w warn_days <targets>
+    check_certificates.pl -c crit_days: -w warn_days: <targets>
 
 will issue a warning if any one of the target certificates will expire less
 than <warn_days> from now, or a critical if any one of the target certificates
 will expire less than <crit_days> from now. 
+
+B<DON'T FORGET THE TRAILING COLON (:)>: if 
+you specify a threshold without the colon at the end, an error will be reported
+if expiration days are above, and not below, the number of days you specified.
+For the most general threshold syntax see the above link.
 
 
 =head1 OPTIONS

@@ -1,4 +1,4 @@
-check_certificates.txt is a plugin to check validity and/or expiration date of
+check_certificates.pl is a plugin to check validity and/or expiration date of
 SSL certificates.
 
 check_certificates.txt supports STARTTLS and going through a proxy. 
