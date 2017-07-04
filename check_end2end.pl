@@ -3,7 +3,7 @@
 
 # check_end2end.pl - Simple configurable end-to-end probe plugin for Nagios
 #
-#     Copyright (C) 20162017 Giacomo Montagner <giacomo@entirelyunlike.net>
+#     Copyright (C) 2016-2017 Giacomo Montagner <giacomo@entirelyunlike.net>
 #
 #     This program is free software: you can redistribute it and/or modify
 #     it under the same terms as Perl itself, either Perl version 5.8.4 or,
