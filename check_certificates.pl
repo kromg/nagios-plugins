@@ -40,11 +40,14 @@
 #           v 0.5.2     - Fix to a debug message
 #                       - Explicitly noted in the help that ranges in the form
 #                           crit: / warn: must be used. 
+#       2018-02-02T17:14:10+01:00
+#           v 0.5.3     - Changed a construct which broke compatibility with
+#                           Perl 5.10.1 ('r' flag to =~ operator).
 #
 
 use strict;
 use warnings;
-use version; our $VERSION = qv(0.5.2);
+use version; our $VERSION = qv(0.5.3);
 use v5.010.001;
 use utf8;
 use File::Basename qw(basename);
@@ -405,7 +408,10 @@ sub new {
         main::debug "Proxy setup: using environment variables for proxy.";
         $self->env_proxy();
     } else {
-        main::debug "Proxy setup: ", $proxy =~ s{//.*?:.*?\@}{//XXXXXX:XXXXXX\@}r;
+        {
+            (my $debug_p = $proxy) =~ s{//.*?:.*?\@}{//XXXXXX:XXXXXX\@};
+            main::debug "Proxy setup: ", $debug_p;
+        }
         $self->proxy( ($schemes // PROXY_SCHEMES()), $proxy );
     }
 
