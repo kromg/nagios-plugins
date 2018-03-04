@@ -44,6 +44,10 @@
 #           v 0.5.3     - Changed a construct which broke compatibility with
 #                           Perl 5.10.1 ('r' flag to =~ operator).
 #
+#       2018-03-04T22:40:19+01:00
+#           v 0.6.0     - Dropped Monitoring::Plugin::CheckCerts in favor of
+#                           regular Monitoring::Plugin.
+#
 
 use strict;
 use warnings;
@@ -79,7 +83,7 @@ my $proxy_spec   = '[<scheme>://][<user>:<password>@]<proxy>[:<port>]';
 
 # This plugin's initialization - see https://metacpan.org/pod/Monitoring::Plugin
 #   --verbose, --help, --usage, --timeout and --host are defined automatically.
-my $np = Monitoring::Plugin::CheckCerts->new(
+my $np = Monitoring::Plugin->new(
     usage => "Usage: %s [-v|--verbose] [-t <timeout>] [-d|--debug] "
             . "[-h|--help] [-M|--manual] "
             . "[-P|--useEnvProxy] [--proxy=$proxy_spec] [--proxyForScheme=<scheme>] "
@@ -225,18 +229,12 @@ TARGET: for my $target (@ARGV) {
 
     my $expiry_date = strftime("%a %d %b %Y %H:%M:%S %Z", localtime( $cert->{ not_after } ) );
 
-    if ($status == OK) {
-        $np->add_ok( "target=$target, expires=$expiry_date ($days_to_expiration days)" );
-    } elsif ($status == WARNING) {
-        $np->add_warning( "target=$target, expires=$expiry_date ($days_to_expiration days)" );
-    } elsif ($status == CRITICAL) {
-        $np->add_critical( "target=$target, expires=$expiry_date ($days_to_expiration days)" );
-    }
+    $np->add_message($status, "target=$target, expires=$expiry_date ($days_to_expiration days)");
 
 }
 
 # Finally, exit
-$np->plugin_exit( $np->status(), $np->build_message() );
+$np->plugin_exit( $np->check_messages() );
 
 
 
@@ -247,135 +245,6 @@ $np->plugin_exit( $np->status(), $np->build_message() );
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 
-
-
-###############################################################################
-## Monitoring::Plugin extension
-###############################################################################
-package Monitoring::Plugin::CheckCerts;
-
-use strict;
-use warnings;
-use Monitoring::Plugin;
-use parent qw(
-    Monitoring::Plugin
-);
-
-sub new {
-    my $class = shift;
-    my $self = $class->SUPER::new(@_);
-    $self->{_checkcerts_status} = 0;
-    $self->{_checkcerts_oks} = [];
-    $self->{_checkcerts_warnings} = [];
-    $self->{_checkcerts_criticals} = [];
-
-    return $self;
-}
-
-sub raise_status {
-    my ($self, $newStatus) = @_;
-    $self->{_checkcerts_status} = $newStatus
-        if $self->{_checkcerts_status} < $newStatus;
-}
-
-sub add_warning {
-    my $self = shift;
-
-    push @{ $self->{_checkcerts_warnings} }, @_;
-
-    $self->raise_status( WARNING );
-}
-
-sub add_critical {
-    my $self = shift;
-
-    push @{ $self->{_checkcerts_criticals} }, @_;
-
-    $self->raise_status( CRITICAL );
-}
-
-sub add_ok {
-    my $self = shift;
-
-    push @{ $self->{_checkcerts_oks} }, @_;
-}
-
-sub add_status {
-    my ($self, $status, $reason) = @_;
-
-    if ($status == OK) {
-        $self->add_ok( $reason );
-    } elsif ($status == WARNING) {
-        $self->add_warning( $reason );
-    } elsif ($status == CRITICAL) {
-        $self->add_critical( $reason );
-    }
-}
-
-sub status {
-    return $_[0]->{_checkcerts_status};
-}
-
-sub oks {
-    return wantarray                    ?
-        @{ $_[0]->{_checkcerts_oks} } :
-           $_[0]->{_checkcerts_oks}   ;
-}
-
-sub warnings {
-    return wantarray                    ?
-        @{ $_[0]->{_checkcerts_warnings} } :
-           $_[0]->{_checkcerts_warnings}   ;
-}
-
-sub criticals {
-    return wantarray                    ?
-        @{ $_[0]->{_checkcerts_criticals} } :
-           $_[0]->{_checkcerts_criticals}   ;
-}
-
-sub get_criticals {
-    my ($self) = @_;
-    
-    my @crits = $self->criticals();
-    return "CRITICAL: ". join("; ", @crits). "; "
-        if @crits;
-}
-
-sub get_warnings {
-    my ($self) = @_;
-
-    my @warns = $self->warnings();
-    return "WARNING: ". join("; ", @warns). "; "
-        if @warns;
-}
-
-sub get_oks {
-    my ($self) = @_;
-
-    my @oks = $self->oks();
-    return "OK: ". join("; ", @oks). "; "
-        if @oks;
-}
-
-sub build_message {
-    my ($self) = @_;
-
-    my $msg;
-    if (my $crit = $self->get_criticals()) {
-        $msg .= $crit;
-    }
-        
-    if (my $warn = $self->get_warnings()) {
-        $msg .= $warn;
-    }
-
-    if (my $oks = $self->get_oks()) {
-        $msg .= $oks;
-    }
-
-    return $msg;
-}
 
 ###############################################################################
 ## LWP::UserAgent extension
@@ -466,10 +335,7 @@ BEGIN {
     }
     
     my @proxy_methods = qw(
-        status
-        add_ok
-        add_warning
-        add_critical
+        add_message
         plugin_die
         plugin_exit
     );
