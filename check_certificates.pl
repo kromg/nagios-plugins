@@ -466,7 +466,7 @@ sub get_peer_certificate_without_proxy {
     my $client;
     if ($opts->starttls()) {
         unless (
-            my $client = IO::Socket::INET6->new(
+            $client = IO::Socket::INET6->new(
                 PeerAddr        => $host,
                 PeerPort        => $port,
             )
